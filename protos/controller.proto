@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+// protoc -I protos --grpc_out=. --plugin=protoc-gen-grpc=`which grpc_cpp_plugin` protos/controller.proto
+// protoc -I protos protos/controller.proto --cpp_out=.
+
+package universe;
+
+service Controller {
+    rpc JoinGroup(JoinGroupRequest) returns (JoinGroupResponse) {}
+}
+
+message JoinGroupRequest {
+    string name = 1;
+}
+
+message JoinGroupResponse {
+    string message = 1;
+}
