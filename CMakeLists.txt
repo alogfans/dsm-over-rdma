@@ -25,8 +25,8 @@ add_custom_command(
                 "${PROTO_FILES}.proto"
 )
 
-set(SHARED_SOURCES Monitor.cpp MonitorImpl.cpp Worker.cpp ${PROTO_FILES}.pb.cc ${PROTO_FILES}.grpc.pb.cc)
-set(SHARED_HEADERS Monitor.h MonitorImpl.h Worker.h ${PROTO_FILES}.pb.h ${PROTO_FILES}.grpc.pb.h)
+set(SHARED_SOURCES Monitor.cpp Worker.cpp ${PROTO_FILES}.pb.cc ${PROTO_FILES}.grpc.pb.cc)
+set(SHARED_HEADERS Monitor.h Worker.h ${PROTO_FILES}.pb.h ${PROTO_FILES}.grpc.pb.h)
 set(SHARED_FILES ${SHARED_SOURCES} ${SHARED_HEADERS})
 add_executable(server example/server.cpp ${SHARED_FILES} ${SHARED_HEADERS})
 add_executable(client example/client.cpp ${SHARED_FILES} ${SHARED_HEADERS})

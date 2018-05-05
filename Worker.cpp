@@ -7,10 +7,9 @@
 #include "Worker.h"
 
 using namespace universe;
-using namespace grpc;
 
 Worker::Worker(const std::string &address) {
-    std::shared_ptr<Channel> channel = CreateChannel(address, InsecureChannelCredentials());
+    std::shared_ptr<grpc::Channel> channel = grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
     stub = Controller::NewStub(channel);
 }
 
@@ -19,8 +18,8 @@ std::string Worker::JoinGroup(const std::string &name) {
     request.set_name(name);
 
     JoinGroupResponse reply;
-    ClientContext context;
-    Status status = stub->JoinGroup(&context, request, &reply);
+    grpc::ClientContext context;
+    grpc::Status status = stub->JoinGroup(&context, request, &reply);
     if (status.ok()) {
         return reply.message();
     } else {

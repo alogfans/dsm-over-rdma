@@ -12,7 +12,6 @@
 #include "protos/controller.grpc.pb.h"
 
 namespace universe {
-
     class Worker {
     public:
         Worker(const std::string &address);
@@ -20,7 +19,6 @@ namespace universe {
     private:
         std::unique_ptr<Controller::Stub> stub;
     };
-
 }
 
 
