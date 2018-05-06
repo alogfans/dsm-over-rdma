@@ -15,9 +15,13 @@ namespace universe {
     class Worker {
     public:
         Worker(const std::string &address);
-        std::string JoinGroup(const std::string &name);
+        bool JoinGroup();
+        uint64_t AllocPage(uint64_t size, uint64_t align);
+        bool SyncMap();
+
     private:
         std::unique_ptr<Controller::Stub> stub;
+        const std::string address;
     };
 }
 

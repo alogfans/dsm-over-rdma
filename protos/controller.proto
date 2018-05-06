@@ -1,18 +1,64 @@
 syntax = "proto3";
 
-// protoc -I protos --grpc_out=. --plugin=protoc-gen-grpc=`which grpc_cpp_plugin` protos/controller.proto
-// protoc -I protos protos/controller.proto --cpp_out=.
-
 package universe;
 
 service Controller {
-    rpc JoinGroup(JoinGroupRequest) returns (JoinGroupResponse) {}
+    rpc JoinGroup(JoinGroupRequest) returns (JoinGroupReply) {}
+    rpc AllocPage(AllocPageRequest) returns (AllocPageReply) {}
+    rpc SyncMap(SyncMapRequest) returns (SyncMapReply) {}
 }
 
 message JoinGroupRequest {
-    string name = 1;
+    string peer = 1; // peer name
+
+    uint32 qpn = 2;
+    uint32 lid = 3;  // only lower 16 bits used
 }
 
-message JoinGroupResponse {
-    string message = 1;
+message JoinGroupReply {
+    uint32 err_code = 1;
+}
+
+message AllocPageRequest {
+    uint64 size = 2;          // page size
+    uint64 align = 3;         // page alignment
+    string owner_peer = 4;    // owner peer
+    uint64 owner_addr = 5;
+    uint32 owner_key = 6;
+}
+
+message AllocPageReply {
+    uint64 shared_addr = 1;   // identifier of shared page
+    uint32 err_code = 2;
+}
+
+message WorkerDesc {
+    string peer = 1; // peer name
+    uint32 qpn = 2;
+    uint32 lid = 3;  // only lower 16 bits used
+    bytes  gid = 4;  // uint8[16]
+}
+
+message PageRepList {
+    string peer = 1;
+    uint64 addr = 2;
+    uint32 key = 3;
+}
+
+message PageDesc {
+    uint64 shared_addr = 1;   // identifier of shared page
+    uint64 size = 2;          // page size
+    uint64 align = 3;         // page alignment
+    string owner_peer = 4;    // owner peer
+    repeated PageRepList rep_list = 5;  // replication list
+}
+
+message SyncMapRequest {
+    uint32 epoch = 1;
+}
+
+message SyncMapReply {
+    uint32 err_code = 1;
+    repeated WorkerDesc workers = 2;
+    repeated PageDesc pages = 3;
 }

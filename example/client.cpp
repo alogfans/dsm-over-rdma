@@ -9,6 +9,9 @@ using namespace universe;
 
 int main() {
     Worker worker("127.0.0.1:8080");
-    std::cout << worker.JoinGroup("world") << std::endl;
+    worker.JoinGroup();
+    auto shared_addr = worker.AllocPage(1024, 64);
+    std::cout << shared_addr << std::endl;
+    worker.SyncMap();
     return 0;
 }

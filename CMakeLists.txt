@@ -21,13 +21,13 @@ add_custom_command(
         COMMAND ${PROTOBUF_PROTOC_EXECUTABLE}
         ARGS    "--proto_path=${PROTO_PATH}"
                 "--grpc_out=${PROTO_PATH}"
-                "--plugin=protoc-gen-grpc=/usr/local/bin/grpc_cpp_plugin"
+                "--plugin=protoc-gen-grpc=/usr/bin/grpc_cpp_plugin"
                 "${PROTO_FILES}.proto"
 )
 
 set(SHARED_SOURCES Monitor.cpp Worker.cpp ${PROTO_FILES}.pb.cc ${PROTO_FILES}.grpc.pb.cc)
 set(SHARED_HEADERS Monitor.h Worker.h ${PROTO_FILES}.pb.h ${PROTO_FILES}.grpc.pb.h)
-set(SHARED_FILES ${SHARED_SOURCES} ${SHARED_HEADERS})
+set(SHARED_FILES ${SHARED_SOURCES} ${SHARED_HEADERS} GlobalMap.h)
 
 add_library(universe ${SHARED_FILES} ${SHARED_HEADERS})
 link_libraries(universe)

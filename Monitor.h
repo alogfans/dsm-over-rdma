@@ -7,16 +7,31 @@
 
 #include <string>
 #include <grpcpp/grpcpp.h>
+#include <atomic>
 
 #include "protos/controller.grpc.pb.h"
 #include "protos/controller.pb.h"
+#include "GlobalMap.h"
 
 namespace universe {
     class MonitorImpl final : public Controller::Service {
-        grpc::Status JoinGroup(grpc::ServerContext* context,
-                               const JoinGroupRequest* request,
-                               JoinGroupResponse* response);
+    public:
+        MonitorImpl();
+        virtual ~MonitorImpl() = default;
 
+    private:
+        grpc::Status JoinGroup(grpc::ServerContext* context, const JoinGroupRequest* request,
+                               JoinGroupReply* response) override;
+
+        grpc::Status AllocPage(grpc::ServerContext* context, const AllocPageRequest* request,
+                               AllocPageReply* response) override;
+
+        grpc::Status SyncMap(grpc::ServerContext* context, const SyncMapRequest* request,
+                             SyncMapReply* response) override ;
+
+    private:
+        std::atomic<uint64_t> page_counter;
+        std::shared_ptr<GlobalMap> global_map;
     };
 
     class Monitor {
