@@ -11,6 +11,7 @@ using namespace universe;
 Worker::Worker(const std::string &address) : address(address) {
     std::shared_ptr<grpc::Channel> channel = grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
     stub = Controller::NewStub(channel);
+    global_map = std::make_shared<GlobalMap>();
 }
 
 bool Worker::JoinGroup() {
@@ -63,8 +64,17 @@ bool Worker::SyncMap() {
         return false;
     }
 
+    global_map->Clear();
+
     for (auto &v : reply.workers()) {
-        std::cout << v.peer() << " " << v.qpn() << " " << v.lid() << std::endl;
+        global_map->AddWorker(v.peer(), v.qpn(), static_cast<uint16_t>(v.lid() & 0xffff));
+    }
+
+    for (auto &v : reply.pages()) {
+        global_map->AddPage(v.shared_addr(), v.size(), v.align(), v.owner_peer());
+        for (auto &u : v.rep_list()) {
+            global_map->AddPageRepInfo(v.shared_addr(), u.peer(), u.addr(), u.key());
+        }
     }
 
     return true;

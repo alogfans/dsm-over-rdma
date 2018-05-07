@@ -32,6 +32,11 @@ struct GlobalMap {
     std::map<uint64_t, page_desc> page_map;         // shared_addr -> page_desc
 
 public:
+    void Clear() {
+        worker_map.clear();
+        page_map.clear();
+    }
+
     void AddWorker(const std::string &peer, uint32_t qpn, uint16_t lid) {
         worker_map[peer] = worker_desc{qpn, lid};
     }

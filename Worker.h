@@ -10,6 +10,7 @@
 
 #include "protos/controller.pb.h"
 #include "protos/controller.grpc.pb.h"
+#include "GlobalMap.h"
 
 namespace universe {
     class Worker {
@@ -22,6 +23,7 @@ namespace universe {
     private:
         std::unique_ptr<Controller::Stub> stub;
         const std::string address;
+        std::shared_ptr<GlobalMap> global_map;
     };
 }
 
