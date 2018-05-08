@@ -1,10 +1,12 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 2.8)
 project(universe)
 
 find_package(Protobuf REQUIRED)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_FLAGS "-std=c++11 -O3")
 link_libraries(protobuf grpc++ rdmacm ibverbs)
+
+set(PROTO_GENERATOR /usr/bin/grpc_cpp_plugin)
 
 set(PROTO_PATH "${CMAKE_SOURCE_DIR}/protos")
 set(PROTO_FILES "${PROTO_PATH}/controller")
@@ -21,7 +23,7 @@ add_custom_command(
         COMMAND ${PROTOBUF_PROTOC_EXECUTABLE}
         ARGS    "--proto_path=${PROTO_PATH}"
                 "--grpc_out=${PROTO_PATH}"
-                "--plugin=protoc-gen-grpc=/usr/bin/grpc_cpp_plugin"
+                "--plugin=protoc-gen-grpc=${PROTO_GENERATOR}"
                 "${PROTO_FILES}.proto"
 )
 
