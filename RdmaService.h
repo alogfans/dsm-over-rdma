@@ -12,57 +12,51 @@
 #include <vector>
 #include <atomic>
 
-#define DEBUG_ENABLED
-#ifdef DEBUG_ENABLED
 #define DEBUG(format,...) printf("ERR " __FILE__":%04d " format " (errno %d %s)\n", __LINE__, ##__VA_ARGS__, errno, strerror(errno))
-#else
-#define DEBUG(format,...)
-#endif
-
-#define RIO_DEFAULT_QKEY       (0x11111111)
-#define RIO_MULTICAST_QPN      (0xffffffff)
-#define RIO_FULL_ACCESS_PERM   (IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC)
 
 namespace rdma {
     class EndPoint;
-    enum EndPointType {
-        RC = 2, UC, UD
-    };
+    class WorkBatch;
+    class MemoryRegion;
+
+    const uint32_t MultiCastQPN = 0xffffffff;
+    const uint32_t MulticastKey = 0x11111111;
+    const int FullAccessPermFlags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
     class Device {
     public:
         static std::shared_ptr<Device> Open(const std::string &device_name = "", uint8_t port = 1);
+
         virtual ~Device();
 
         Device(const Device &) = delete;
         Device &operator=(const Device &) = delete;
 
+        std::shared_ptr<EndPoint> CreateEndPoint(ibv_qp_type type, uint32_t max_cqe = 4, uint32_t max_wr = 4, uint32_t max_inline_data = 64);
         int Poll(int timeout_ms = -1);
+        int Poll(std::vector<ibv_wc> &replies, int timeout_ms = -1);
 
-        std::shared_ptr<EndPoint> CreateEndPoint(EndPointType type,
-                                                 uint32_t max_cqe = 4,
-                                                 uint32_t max_wr = 4,
-                                                 uint32_t max_inline_data = 64);
+        std::shared_ptr<MemoryRegion> Malloc(size_t n, bool zero = false, uint64_t align = 16);
 
-        uint16_t LID();
-        uint8_t Port() { return ib_port; }
-        struct ibv_pd *UnsafePD() { return pd; }
+        uint16_t LID() const;
+        const std::vector<uint8_t> GID(int gid_index = 0) const;
+        uint8_t Port() const { return ib_port; }
 
     public:
-        explicit Device(struct ibv_context *ib_ctx, struct ibv_pd *pd,
-                struct ibv_comp_channel *channel,
-                int epoll_fd, uint8_t ib_port):
+        explicit Device(ibv_context *ib_ctx, ibv_pd *pd, ibv_comp_channel *channel, int epoll_fd, uint8_t ib_port):
                 ib_ctx(ib_ctx), pd(pd), channel(channel), epoll_fd(epoll_fd), ib_port(ib_port) { }
 
     private:
-        struct ibv_context *ib_ctx;
-        struct ibv_pd *pd;
-        struct ibv_comp_channel *channel;
+        static ibv_context *getContext(const std::string &device_name);
+
+    private:
+        ibv_context *ib_ctx;
+        ibv_pd *pd;
+        ibv_comp_channel *channel;
         int epoll_fd;
         uint8_t ib_port;
     };
 
-    class WorkRequest;
     class EndPoint {
     public:
         virtual ~EndPoint();
@@ -70,75 +64,85 @@ namespace rdma {
         EndPoint(const EndPoint &) = delete;
         EndPoint &operator=(const EndPoint &) = delete;
 
-        uint32_t QPN() { return qp->qp_num; }
-        int ReadyToSend(std::shared_ptr<Device> device, uint16_t remote_lid, uint32_t remote_qpn);
+        int RegisterRemote(uint16_t remote_lid, uint32_t remote_qpn);
+        int JoinMulticast(const std::vector<uint8_t> &remote_gid, uint16_t remote_lid);
+        int LeaveMulticast(const std::vector<uint8_t> &remote_gid, uint16_t remote_lid);
 
-        // int JoinMulticast(GID, LID)
+        uint32_t QPN() const { return qp->qp_num; }
 
     public:
-        explicit EndPoint(EndPointType type, struct ibv_cq *cq, struct ibv_qp *qp)
-                : type(type), cq(cq), qp(qp), ah(NULL) { }
+        explicit EndPoint(uint8_t ib_port, ibv_cq *cq, ibv_qp *qp) : ib_port(ib_port), cq(cq), qp(qp), ah(NULL) { }
 
         struct ibv_qp *UnsafeQP() { return qp; }
         struct ibv_ah *UnsafeAH() { return ah; }
 
     private:
-        EndPointType type;
+        int setInit(ibv_qp *qp, uint8_t ib_port);
+        int SetRTR(ibv_qp *qp, uint32_t remote_qpn, uint16_t remote_lid, uint8_t ib_port);
+        int setRTS(ibv_qp *qp);
+
+    private:
         struct ibv_cq *cq;
         struct ibv_qp *qp;
-
         struct ibv_ah *ah;
+        uint8_t ib_port;
     };
 
     class MemoryRegion {
     public:
-        static std::shared_ptr<MemoryRegion> Malloc(std::shared_ptr<Device> device, size_t n,
-                                                    bool zero = false, uint64_t align = 16);
+        explicit MemoryRegion(uint8_t *addr, size_t n, struct ibv_mr *mr) : addr(addr), n(n), mr(mr) { }
 
-    public:
-        explicit MemoryRegion(void *addr, size_t n, struct ibv_mr *mr) : addr(addr), n(n), mr(mr) { }
-        virtual ~MemoryRegion();
+        virtual ~MemoryRegion() {
+            if (mr) { ibv_dereg_mr(mr); }
+            if (addr) { free(addr); }
+        }
 
         MemoryRegion(const MemoryRegion &) = delete;
         MemoryRegion &operator=(const MemoryRegion &) = delete;
 
-        uint64_t VirtualAddress() { return (uintptr_t) addr; }
-        uint32_t Key() { return mr->lkey; }
-        void *Raw() { return addr; }
+        uint64_t VirtualAddress() const { return (uintptr_t) addr; }
+        uint32_t Key() const { return mr->lkey; }
+        uint8_t *Get() const { return addr; }
+        uint8_t &operator[](int i) { return addr[i]; }
 
     private:
-        void *addr;
+        uint8_t *addr;
         size_t n;
         struct ibv_mr *mr;
     };
 
-    class WorkRequest {
+    class WorkBatch {
     public:
-        explicit WorkRequest(std::shared_ptr<EndPoint> endpoint) : endpoint(endpoint) { counter.store(0); }
+        struct PathDesc {
+            PathDesc(const std::shared_ptr<MemoryRegion> memory, uint64_t offset) :
+                    Address(memory->VirtualAddress() + offset), Key(memory->Key()) { }
+            PathDesc(uint64_t address, uint32_t key) : Address(address), Key(key) { }
 
-        int Write(std::shared_ptr<MemoryRegion> memory, uint64_t offset, uint32_t length,
-                  uint64_t remote_address, uint32_t remote_key);
+            uint64_t Address;
+            uint32_t Key;
+        };
 
-        int WriteImm(std::shared_ptr<MemoryRegion> memory, uint64_t offset, uint32_t length, uint32_t imm_data,
-                     uint64_t remote_address, uint32_t remote_key);
+        WorkBatch(std::shared_ptr<EndPoint> endpoint) : counter(0), endpoint(std::move(endpoint)) { }
 
-        int Read(std::shared_ptr<MemoryRegion> memory, uint64_t offset, uint32_t length,
-                 uint64_t remote_address, uint32_t remote_key);
+        void Write(const PathDesc &local, const PathDesc &target, uint32_t length);
+        void WriteImm(const PathDesc &local, const PathDesc &target, uint32_t length, uint32_t imm_data);
+        void Read(const PathDesc &local, const PathDesc &target, uint32_t length);
+        void FetchAndAdd(const PathDesc &local, const PathDesc &target, uint64_t add_val);
+        void CompareAndSwap(const PathDesc &local, const PathDesc &target, uint64_t compare_val, uint64_t swap_val);
+        void Send(const PathDesc &local, uint32_t length);
+        void Receive(const PathDesc &local, uint32_t length);
 
-        int FetchAndAdd(std::shared_ptr<MemoryRegion> memory, uint64_t offset,
-                        uint64_t add_val, uint64_t remote_address, uint32_t remote_key);
-
-        int CompareAndSwap(std::shared_ptr<MemoryRegion> memory, uint64_t offset,
-                           uint64_t compare_val, uint64_t swap_value,
-                           uint64_t remote_address, uint32_t remote_key);
-
-        int Send(std::shared_ptr<MemoryRegion> memory, uint64_t offset, uint32_t length);
-
-        int Receive(std::shared_ptr<MemoryRegion> memory, uint64_t offset, uint32_t length);
+        int Commit();
 
     private:
-        std::shared_ptr<EndPoint> endpoint;
         std::atomic<uint64_t> counter;
+        std::vector<ibv_send_wr> send_wr;
+        std::vector<ibv_sge> send_sge;
+        std::vector<ibv_recv_wr> recv_wr;
+        std::vector<ibv_sge> recv_sge;
+        std::shared_ptr<EndPoint> endpoint;
+
+        void genericNewOp(ibv_send_wr &wr, const PathDesc &local, uint32_t length);
     };
 }
 

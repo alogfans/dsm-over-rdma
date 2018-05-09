@@ -11,27 +11,11 @@
 
 using namespace rdma;
 
-struct ibv_device* search_device(const std::string &device_name, struct ibv_device **device_list, int num_devices) {
-    if (!device_name.empty()) {
-        int i;
-        for (i = 0; i < num_devices; ++i) {
-            const char * current_device_name = ibv_get_device_name(device_list[i]);
-            if (current_device_name && strcmp(current_device_name, device_name.c_str()) == 0) {
-                return device_list[i];
-            }
-        }
-    } else if (num_devices > 0) {
-        return device_list[0];
-    }
-
-    return NULL;
-}
-
-struct ibv_context *get_context(const std::string &device_name) {
-    struct ibv_device **device_list = NULL;
-    struct ibv_device *device = NULL;
-    struct ibv_context *context = NULL;
+ibv_context *Device::getContext(const std::string &device_name) {
+    ibv_device **device_list = nullptr;
+    ibv_context *context = nullptr;
     int num_devices = 0;
+    int choose_device = 0;
 
     device_list = ibv_get_device_list(&num_devices);
     if (!device_list || num_devices <= 0) {
@@ -39,35 +23,35 @@ struct ibv_context *get_context(const std::string &device_name) {
         goto failure;
     }
 
-    device = search_device(device_name, device_list, num_devices);
-    if (!device) {
-        DEBUG("device not found.");
-        goto failure;
+    if (!device_name.empty()) {
+        for (int i = 0; i < num_devices; ++i) {
+            const char * current_device_name = ibv_get_device_name(device_list[i]);
+            if (current_device_name && strcmp(current_device_name, device_name.c_str()) == 0) {
+                choose_device = i;
+                break;
+            }
+        }
     }
 
-    context = ibv_open_device(device);
-    return context;
+    context = ibv_open_device(device_list[choose_device]);
 
 failure:
     if (device_list) {
         ibv_free_device_list(device_list);
     }
 
-    return NULL;
+    return context;
 }
 
 std::shared_ptr<Device> Device::Open(const std::string &device_name, uint8_t port) {
-    struct ibv_port_attr port_attr;
-    struct epoll_event event;
+    ibv_port_attr port_attr = { };
+    epoll_event event = { };
+    ibv_context *ib_ctx = nullptr;
+    ibv_pd *pd = nullptr;
+    ibv_comp_channel *channel = nullptr;
+    int epoll_fd = -1, flags = 0;
 
-    struct ibv_context *ib_ctx = NULL;
-    struct ibv_pd *pd = NULL;
-    struct ibv_comp_channel *channel = NULL;
-    struct rio_ctx_t *ctx = NULL;
-    int epoll_fd = -1;
-    int flags;
-
-    ib_ctx = get_context(device_name);
+    ib_ctx = getContext(device_name);
     if (!ib_ctx) {
         errno = EINVAL;
         goto failure;
@@ -83,7 +67,6 @@ std::shared_ptr<Device> Device::Open(const std::string &device_name, uint8_t por
         DEBUG("ibv_query_port failed.");
         goto failure;
     }
-
 
     pd = ibv_alloc_pd(ib_ctx);
     if (!pd) {
@@ -123,7 +106,7 @@ std::shared_ptr<Device> Device::Open(const std::string &device_name, uint8_t por
         goto failure;
     }
 
-    return std::make_shared<Device>(ib_ctx, pd, channel, port, epoll_fd);
+    return std::make_shared<Device>(ib_ctx, pd, channel, epoll_fd, port);
 
 failure:
     if (epoll_fd >= 0) {
@@ -142,7 +125,7 @@ failure:
         ibv_close_device(ib_ctx);
     }
 
-    return NULL;
+    return nullptr;
 }
 
 Device::~Device() {
@@ -164,18 +147,22 @@ Device::~Device() {
 }
 
 int Device::Poll(int timeout_ms) {
-    struct epoll_event event;
+    std::vector<ibv_wc> replies;
+    return Poll(replies, timeout_ms);
+}
+
+int Device::Poll(std::vector<ibv_wc> &replies, int timeout_ms) {
+    epoll_event event = { };
     int rc = epoll_wait(epoll_fd, &event, 1, timeout_ms);
     if (rc <= 0) {
         return rc;
     }
 
     if (event.data.fd == channel->fd) {
-        struct ibv_cq *cq;
-        struct rio_ctx_t *cq_ctx;
-        struct ibv_wc wc;
+        ibv_cq *cq = nullptr;
+        ibv_wc wc = { };
 
-        if (ibv_get_cq_event(channel, &cq, (void **) &cq_ctx)) {
+        if (ibv_get_cq_event(channel, &cq, nullptr)) {
             DEBUG("ibv_get_cq_event failed");
             return -1;
         }
@@ -196,6 +183,8 @@ int Device::Poll(int timeout_ms) {
                 continue;
             }
 
+            replies.push_back(wc);
+
             if (wc.status != IBV_WC_SUCCESS) {
                 DEBUG("found a failed working request %s", ibv_wc_status_str(wc.status));
                 return -1;
@@ -206,22 +195,43 @@ int Device::Poll(int timeout_ms) {
     }
 
     if (event.data.fd == ib_ctx->async_fd) {
-        struct ibv_async_event event;
-
-        if (ibv_get_async_event(ib_ctx, &event)) {
+        ibv_async_event async_event = { };
+        if (ibv_get_async_event(ib_ctx, &async_event)) {
             DEBUG("ibv_get_async_event failed");
             return -1;
         }
 
-        ibv_ack_async_event(&event);
+        ibv_ack_async_event(&async_event);
 
-        DEBUG("event: %s", ibv_event_type_str(event.event_type));
+        DEBUG("async event: %s", ibv_event_type_str(async_event.event_type));
+
         return 1;
     }
 }
 
-uint16_t Device::LID() {
-    struct ibv_port_attr port_attr;
+std::shared_ptr<MemoryRegion> Device::Malloc(size_t n, bool zero, uint64_t align) {
+    uint8_t *byteBuffer = nullptr;
+    posix_memalign((void **) &byteBuffer, align, n);
+    if (!byteBuffer) {
+        DEBUG("rio_malloc failed.");
+        return nullptr;
+    }
+
+    if (zero) {
+        memset(byteBuffer, 0, n);
+    }
+
+    ibv_mr *mr = ibv_reg_mr(pd, byteBuffer, n, FullAccessPermFlags);
+    if (!mr) {
+        DEBUG("ibv_reg_mr failed.");
+        return nullptr;
+    }
+
+    return std::make_shared<MemoryRegion>(byteBuffer, n, mr);
+}
+
+uint16_t Device::LID() const {
+    ibv_port_attr port_attr = { };
     if (ibv_query_port(ib_ctx, ib_port, &port_attr)) {
         DEBUG("ibv_query_port failed.");
         return 0xffff;
@@ -229,30 +239,41 @@ uint16_t Device::LID() {
     return port_attr.lid;
 }
 
-std::shared_ptr<EndPoint> Device::CreateEndPoint(EndPointType type,
-                                                 uint32_t max_cqe,
-                                                 uint32_t max_wr,
-                                                 uint32_t max_inline_data) {
-    struct ibv_qp *qp = NULL;
-    struct ibv_cq *cq = NULL;
-
-    cq = ibv_create_cq(ib_ctx, max_cqe, NULL, channel, 0);
-    if (ibv_req_notify_cq(cq, 0)) {
-        DEBUG("ibv_req_notify_cq failed.");
-        goto failure;
+const std::vector<uint8_t> Device::GID(int gid_index) const {
+    ibv_gid gid = { };
+    std::vector<uint8_t> vec;
+    if (ibv_query_gid(ib_ctx, ib_port, gid_index, &gid)) {
+        DEBUG("ibv_query_gid failed.");
+        return vec;
     }
 
+    vec.reserve(16);
+    vec.assign(gid.raw, gid.raw + 16);
+
+    return vec;
+}
+
+std::shared_ptr<EndPoint> Device::CreateEndPoint(ibv_qp_type type, uint32_t max_cqe, uint32_t max_wr, uint32_t max_inline_data) {
+    ibv_qp *qp = nullptr;
+    ibv_cq *cq = nullptr;
+    ibv_qp_init_attr qp_init_attr = { };
+
+    cq = ibv_create_cq(ib_ctx, max_cqe, nullptr, channel, 0);
     if (!cq) {
         DEBUG("ibv_create_cq failed.");
         goto failure;
     }
 
-    struct ibv_qp_init_attr qp_init_attr;
+    if (ibv_req_notify_cq(cq, 0)) {
+        DEBUG("ibv_req_notify_cq failed.");
+        goto failure;
+    }
+
     memset(&qp_init_attr, 0, sizeof(qp_init_attr));
     qp_init_attr.send_cq = cq;
     qp_init_attr.recv_cq = cq;
     qp_init_attr.sq_sig_all = false;
-    qp_init_attr.qp_type = (enum ibv_qp_type) type;
+    qp_init_attr.qp_type = type;
     qp_init_attr.cap.max_send_wr = max_wr;
     qp_init_attr.cap.max_recv_wr = max_wr;
     qp_init_attr.cap.max_send_sge = max_wr;
@@ -265,12 +286,12 @@ std::shared_ptr<EndPoint> Device::CreateEndPoint(EndPointType type,
         goto failure;
     }
 
-    return std::make_shared<EndPoint>(type, cq, qp);
+    return std::make_shared<EndPoint>(ib_port, cq, qp);
 
 failure:
     if (cq) { free(cq); }
     if (qp) { ibv_destroy_qp(qp); }
-    return NULL;
+    return nullptr;
 }
 
 EndPoint::~EndPoint() {
@@ -279,9 +300,26 @@ EndPoint::~EndPoint() {
     if (qp) { ibv_destroy_qp(qp); }
 }
 
+int EndPoint::JoinMulticast(const std::vector<uint8_t> &remote_gid, uint16_t remote_lid) {
+    if (ibv_attach_mcast(qp, (ibv_gid *) remote_gid.data(), remote_lid)) {
+        DEBUG("ibv_attach_mcast failed");
+        return -1;
+    }
 
-int set_queue_pair_init(struct ibv_qp *qp, uint8_t ib_port) {
-    struct ibv_qp_attr attr;
+    return 0;
+}
+
+int EndPoint::LeaveMulticast(const std::vector<uint8_t> &remote_gid, uint16_t remote_lid) {
+    if (ibv_detach_mcast(qp, (ibv_gid *) remote_gid.data(), remote_lid)) {
+        DEBUG("ibv_detach_mcast failed");
+        return -1;
+    }
+
+    return 0;
+}
+
+int EndPoint::setInit(ibv_qp *qp, uint8_t ib_port) {
+    ibv_qp_attr attr = { };
     int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT;
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_INIT;
@@ -290,21 +328,20 @@ int set_queue_pair_init(struct ibv_qp *qp, uint8_t ib_port) {
 
     if (qp->qp_type == IBV_QPT_RC || qp->qp_type == IBV_QPT_UC) {
         flags |= IBV_QP_ACCESS_FLAGS;
-        attr.qp_access_flags = RIO_FULL_ACCESS_PERM;
+        attr.qp_access_flags = FullAccessPermFlags;
     }
 
     if (qp->qp_type == IBV_QPT_UD) {
         flags |= IBV_QP_QKEY;
-        attr.qkey = RIO_DEFAULT_QKEY;
+        attr.qkey = MulticastKey;
     }
 
     return ibv_modify_qp(qp, &attr, flags);
 }
 
-int set_queue_pair_rtr(struct ibv_qp *qp, uint32_t remote_qpn, uint16_t remote_lid, uint8_t ib_port) {
-    struct ibv_qp_attr attr;
-    int flags = IBV_QP_STATE ;
-
+int EndPoint::SetRTR(ibv_qp *qp, uint32_t remote_qpn, uint16_t remote_lid, uint8_t ib_port) {
+    ibv_qp_attr attr = { };
+    int flags = IBV_QP_STATE;
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTR;
 
@@ -316,7 +353,6 @@ int set_queue_pair_rtr(struct ibv_qp *qp, uint32_t remote_qpn, uint16_t remote_l
         attr.ah_attr.sl = 0;
         attr.ah_attr.src_path_bits = 0;
         attr.ah_attr.port_num = ib_port;
-
         attr.dest_qp_num = remote_qpn;
         attr.rq_psn = 0;
     }
@@ -330,8 +366,8 @@ int set_queue_pair_rtr(struct ibv_qp *qp, uint32_t remote_qpn, uint16_t remote_l
     return ibv_modify_qp(qp, &attr, flags);
 }
 
-int set_queue_pair_rts(struct ibv_qp *qp) {
-    struct ibv_qp_attr attr;
+int EndPoint::setRTS(ibv_qp *qp) {
+    ibv_qp_attr attr = { };
     int flags = IBV_QP_STATE | IBV_QP_SQ_PSN;
 
     memset(&attr, 0, sizeof(attr));
@@ -349,30 +385,30 @@ int set_queue_pair_rts(struct ibv_qp *qp) {
     return ibv_modify_qp(qp, &attr, flags);
 }
 
-int EndPoint::ReadyToSend(std::shared_ptr<Device> device, uint16_t remote_lid, uint32_t remote_qpn){
-    if (set_queue_pair_init(qp, device->Port())) {
+int EndPoint::RegisterRemote(uint16_t remote_lid, uint32_t remote_qpn){
+    if (setInit(qp, ib_port)) {
         DEBUG("set_queue_pair_init failed.");
         return -1;
     }
 
-    if (set_queue_pair_rtr(qp, remote_qpn, remote_lid, device->Port())) {
+    if (SetRTR(qp, remote_qpn, remote_lid, ib_port)) {
         DEBUG("set_queue_pair_rtr failed.");
         return -1;
     }
 
     if (qp->qp_type == IBV_QPT_UD) {
-        struct ibv_ah_attr ah_attr;
-        memset(&ah_attr, 0, sizeof(struct ibv_ah_attr));
+        ibv_ah_attr ah_attr = { };
+        memset(&ah_attr, 0, sizeof(ibv_ah_attr));
         ah_attr.dlid = remote_lid;
-        ah_attr.port_num = device->Port();
-        ah = ibv_create_ah(device->UnsafePD(), &ah_attr);
+        ah_attr.port_num = ib_port;
+        ah = ibv_create_ah(qp->pd, &ah_attr);
         if (!ah) {
             DEBUG("ibv_create_ah failed.");
             return -1;
         }
     }
 
-    if (set_queue_pair_rts(qp)) {
+    if (setRTS(qp)) {
         DEBUG("set_queue_pair_rts failed.");
         return -1;
     }
@@ -380,238 +416,134 @@ int EndPoint::ReadyToSend(std::shared_ptr<Device> device, uint16_t remote_lid, u
     return 0;
 }
 
-MemoryRegion::~MemoryRegion() {
-    if (mr) { ibv_dereg_mr(mr); }
-    if (addr) { free(addr); }
-}
-
-std::shared_ptr<MemoryRegion> MemoryRegion::Malloc(std::shared_ptr<rdma::Device> device, size_t n, bool zero, uint64_t align) {
-    void *addr = NULL;
-    posix_memalign(&addr, align, n);
-    if (!addr) {
-        DEBUG("rio_malloc failed.");
-        return NULL;
-    }
-
-    if (zero) {
-        memset(addr, 0, n);
-    }
-
-    struct ibv_mr *mr = ibv_reg_mr(device->UnsafePD(), addr, n, RIO_FULL_ACCESS_PERM);
-    if (!mr) {
-        DEBUG("ibv_reg_mr failed.");
-        return NULL;
-    }
-
-    return std::make_shared<MemoryRegion>(addr, n, mr);
-}
-
-int WorkRequest::Write(std::shared_ptr<rdma::MemoryRegion> memory, uint64_t offset, uint32_t length,
-                       uint64_t remote_address, uint32_t remote_key) {
-
-    struct ibv_send_wr wr, *bad_wr = NULL;
-    struct ibv_sge sge;
-
-    memset(&wr, 0, sizeof(wr));
-    memset(&sge, 0, sizeof(sge));
-
-    sge.addr = memory->VirtualAddress() + offset;
-    sge.lkey = memory->Key();
+void WorkBatch::genericNewOp(ibv_send_wr &wr, const WorkBatch::PathDesc &local, uint32_t length) {
+    ibv_sge sge = {};
     sge.length = length;
-
+    sge.lkey = local.Key;
+    sge.addr = local.Address;
+    send_sge.push_back(sge);
     wr.wr_id = counter.fetch_add(1);
     wr.send_flags = IBV_SEND_SIGNALED;
+    wr.num_sge = 1;
+}
 
+void WorkBatch::Write(const rdma::WorkBatch::PathDesc &local, const rdma::WorkBatch::PathDesc &target, uint32_t length) {
+    ibv_send_wr wr = {};
+    genericNewOp(wr, local, length);
     wr.opcode = IBV_WR_RDMA_WRITE;
-    wr.wr.rdma.remote_addr = remote_address;
-    wr.wr.rdma.rkey = remote_key;
-
-    wr.num_sge = 1;
-    wr.sg_list = &sge;
-
-    int rc = ibv_post_send(endpoint->UnsafeQP(), &wr, &bad_wr);
-    if (rc) {
-        DEBUG("ibv_post_send error. first bad_wr %lud", bad_wr ? bad_wr->wr_id : 0xffffffff);
-    }
-
-    return rc;
+    wr.wr.rdma.remote_addr = target.Address;
+    wr.wr.rdma.rkey = target.Key;
+    send_wr.push_back(wr);
 }
 
-int WorkRequest::WriteImm(std::shared_ptr<rdma::MemoryRegion> memory, uint64_t offset, uint32_t length,
-                          uint32_t imm_data, uint64_t remote_address, uint32_t remote_key) {
-    struct ibv_send_wr wr, *bad_wr = NULL;
-    struct ibv_sge sge;
-
-    memset(&wr, 0, sizeof(wr));
-    memset(&sge, 0, sizeof(sge));
-
-    sge.addr = memory->VirtualAddress() + offset;
-    sge.lkey = memory->Key();
-    sge.length = length;
-
-    wr.wr_id = counter.fetch_add(1);
-    wr.send_flags = IBV_SEND_SIGNALED;
-
+void WorkBatch::WriteImm(const rdma::WorkBatch::PathDesc &local, const rdma::WorkBatch::PathDesc &target,
+                         uint32_t length, uint32_t imm_data) {
+    ibv_send_wr wr = {};
+    genericNewOp(wr, local, length);
     wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    wr.wr.rdma.remote_addr = remote_address;
-    wr.wr.rdma.rkey = remote_key;
+    wr.wr.rdma.remote_addr = target.Address;
+    wr.wr.rdma.rkey = target.Key;
     wr.imm_data = imm_data;
-
-    wr.num_sge = 1;
-    wr.sg_list = &sge;
-
-    int rc = ibv_post_send(endpoint->UnsafeQP(), &wr, &bad_wr);
-    if (rc) {
-        DEBUG("ibv_post_send error. first bad_wr %lud", bad_wr ? bad_wr->wr_id : 0xffffffff);
-    }
-
-    return rc;
+    send_wr.push_back(wr);
 }
 
-int WorkRequest::Read(std::shared_ptr<rdma::MemoryRegion> memory, uint64_t offset, uint32_t length,
-                      uint64_t remote_address, uint32_t remote_key) {
-    struct ibv_send_wr wr, *bad_wr = NULL;
-    struct ibv_sge sge;
-
-    memset(&wr, 0, sizeof(wr));
-    memset(&sge, 0, sizeof(sge));
-
-    sge.addr = memory->VirtualAddress() + offset;
-    sge.lkey = memory->Key();
-    sge.length = length;
-
-    wr.wr_id = counter.fetch_add(1);
-    wr.send_flags = IBV_SEND_SIGNALED;
-
+void WorkBatch::Read(const rdma::WorkBatch::PathDesc &local, const rdma::WorkBatch::PathDesc &target, uint32_t length) {
+    ibv_send_wr wr = {};
+    genericNewOp(wr, local, length);
     wr.opcode = IBV_WR_RDMA_READ;
-    wr.wr.rdma.remote_addr = remote_address;
-    wr.wr.rdma.rkey = remote_key;
-
-    wr.num_sge = 1;
-    wr.sg_list = &sge;
-
-    int rc = ibv_post_send(endpoint->UnsafeQP(), &wr, &bad_wr);
-    if (rc) {
-        DEBUG("ibv_post_send error. first bad_wr %lud", bad_wr ? bad_wr->wr_id : 0xffffffff);
-    }
-
-    return rc;
+    wr.wr.rdma.remote_addr = target.Address;
+    wr.wr.rdma.rkey = target.Key;
+    send_wr.push_back(wr);
 }
 
-int WorkRequest::FetchAndAdd(std::shared_ptr<rdma::MemoryRegion> memory, uint64_t offset, uint64_t add_val,
-                             uint64_t remote_address, uint32_t remote_key) {
-    struct ibv_send_wr wr, *bad_wr = NULL;
-    struct ibv_sge sge;
-
-    memset(&wr, 0, sizeof(wr));
-    memset(&sge, 0, sizeof(sge));
-
-    sge.addr = memory->VirtualAddress() + offset;
-    sge.lkey = memory->Key();
-    sge.length = sizeof(uint64_t);
-
-    wr.wr_id = counter.fetch_add(1);
-    wr.send_flags = IBV_SEND_SIGNALED;
-
+void WorkBatch::FetchAndAdd(const rdma::WorkBatch::PathDesc &local, const WorkBatch::PathDesc &target, uint64_t add_val) {
+    ibv_send_wr wr = {};
+    genericNewOp(wr, local, sizeof(uint64_t));
     wr.opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
-    wr.wr.atomic.remote_addr = remote_address;
-    wr.wr.atomic.rkey = remote_key;
+    wr.wr.atomic.remote_addr = target.Address;
+    wr.wr.atomic.rkey = target.Key;
     wr.wr.atomic.compare_add = add_val;
-
-    wr.num_sge = 1;
-    wr.sg_list = &sge;
-
-    int rc = ibv_post_send(endpoint->UnsafeQP(), &wr, &bad_wr);
-    if (rc) {
-        DEBUG("ibv_post_send error. first bad_wr %lud", bad_wr ? bad_wr->wr_id : 0xffffffff);
-    }
-
-    return rc;
+    send_wr.push_back(wr);
 }
 
-int WorkRequest::CompareAndSwap(std::shared_ptr<rdma::MemoryRegion> memory, uint64_t offset, uint64_t compare_val,
-                                uint64_t swap_value, uint64_t remote_address, uint32_t remote_key) {
-    struct ibv_send_wr wr, *bad_wr = NULL;
-    struct ibv_sge sge;
-
-    memset(&wr, 0, sizeof(wr));
-    memset(&sge, 0, sizeof(sge));
-
-    sge.addr = memory->VirtualAddress() + offset;
-    sge.lkey = memory->Key();
-    sge.length = sizeof(uint64_t);
-
-    wr.wr_id = counter.fetch_add(1);
-    wr.send_flags = IBV_SEND_SIGNALED;
-
+void WorkBatch::CompareAndSwap(const WorkBatch::PathDesc &local, const WorkBatch::PathDesc &target,
+                               uint64_t compare_val, uint64_t swap_val) {
+    ibv_send_wr wr = {};
+    genericNewOp(wr, local, sizeof(uint64_t));
     wr.opcode = IBV_WR_ATOMIC_CMP_AND_SWP;
-    wr.wr.atomic.remote_addr = remote_address;
-    wr.wr.atomic.rkey = remote_key;
+    wr.wr.atomic.remote_addr = target.Address;
+    wr.wr.atomic.rkey = target.Key;
     wr.wr.atomic.compare_add = compare_val;
-    wr.wr.atomic.swap = swap_value;
-
-    wr.num_sge = 1;
-    wr.sg_list = &sge;
-
-    int rc = ibv_post_send(endpoint->UnsafeQP(), &wr, &bad_wr);
-    if (rc) {
-        DEBUG("ibv_post_send error. first bad_wr %lud", bad_wr ? bad_wr->wr_id : 0xffffffff);
-    }
-
-    return rc;
+    wr.wr.atomic.swap = swap_val;
+    send_wr.push_back(wr);
 }
 
-int WorkRequest::Send(std::shared_ptr<rdma::MemoryRegion> memory, uint64_t offset, uint32_t length) {
-    struct ibv_send_wr wr, *bad_wr = NULL;
-    struct ibv_sge sge;
-
-    memset(&wr, 0, sizeof(wr));
-    memset(&sge, 0, sizeof(sge));
-
-    sge.addr = memory->VirtualAddress() + offset;
-    sge.lkey = memory->Key();
-    sge.length = length;
-
-    wr.wr_id = counter.fetch_add(1);
-    wr.send_flags = IBV_SEND_SIGNALED;
-
+void WorkBatch::Send(const rdma::WorkBatch::PathDesc &local, uint32_t length) {
+    ibv_send_wr wr = {};
+    genericNewOp(wr, local, length);
     wr.opcode = IBV_WR_SEND;
+
     if (endpoint->UnsafeQP()->qp_type == IBV_QPT_UD) {
         wr.wr.ud.ah = endpoint->UnsafeAH();
-        wr.wr.ud.remote_qkey = RIO_DEFAULT_QKEY;
-        wr.wr.ud.remote_qpn = endpoint->QPN();
+        wr.wr.ud.remote_qkey = MulticastKey;
+        wr.wr.ud.remote_qpn = MultiCastQPN;
     }
 
-    wr.num_sge = 1;
-    wr.sg_list = &sge;
-
-    int rc = ibv_post_send(endpoint->UnsafeQP(), &wr, &bad_wr);
-    if (rc) {
-        DEBUG("ibv_post_send error. first bad_wr %lud", bad_wr ? bad_wr->wr_id : 0xffffffff);
-    }
-
-    return rc;
+    send_wr.push_back(wr);
 }
 
-int WorkRequest::Receive(std::shared_ptr<rdma::MemoryRegion> memory, uint64_t offset, uint32_t length) {
-    struct ibv_recv_wr wr, *bad_wr = NULL;
-    struct ibv_sge sge;
-
-    memset(&wr, 0, sizeof(wr));
-    memset(&sge, 0, sizeof(sge));
-
-    sge.addr = memory->VirtualAddress() + offset;
-    sge.lkey = memory->Key();
+void WorkBatch::Receive(const rdma::WorkBatch::PathDesc &local, uint32_t length) {
+    ibv_recv_wr wr = {};
+    ibv_sge sge = {};
     sge.length = length;
+    sge.lkey = local.Key;
+    sge.addr = local.Address;
+    recv_sge.push_back(sge);
 
     wr.wr_id = counter.fetch_add(1);
     wr.num_sge = 1;
-    wr.sg_list = &sge;
+    recv_wr.push_back(wr);
+}
 
-    int rc = ibv_post_recv(endpoint->UnsafeQP(), &wr, &bad_wr);
-    if (rc) {
-        DEBUG("ibv_post_send error. first bad_wr %lud", bad_wr ? bad_wr->wr_id : 0xffffffff);
+int WorkBatch::Commit() {
+    int rc = 0;
+    if (!send_wr.empty()) {
+        int sge_index = 0;
+        for (int i = 0; i < send_wr.size(); i++) {
+            send_wr[i].sg_list = &send_sge[sge_index];
+            sge_index += send_wr[i].num_sge;
+            send_wr[i].next = (i + 1 == send_wr.size()) ? nullptr : &send_wr[i + 1];
+        }
+
+        ibv_send_wr *wr = send_wr.data(), *bad_wr = nullptr;
+        rc = ibv_post_send(endpoint->UnsafeQP(), wr, &bad_wr);
+        send_wr.clear();
+        send_sge.clear();
+
+        if (rc) {
+            DEBUG("ibv_post_send error. first bad_wr %lud", bad_wr ? bad_wr->wr_id : 0xffffffff);
+            return rc;
+        }
     }
 
-    return rc;
+    if (!recv_wr.empty()) {
+        int sge_index = 0;
+        for (int i = 0; i < recv_wr.size(); i++) {
+            recv_wr[i].sg_list = &recv_sge[sge_index];
+            sge_index += recv_wr[i].num_sge;
+            recv_wr[i].next = (i + 1 == recv_wr.size()) ? nullptr : &recv_wr[i + 1];
+        }
+
+        ibv_recv_wr *wr = recv_wr.data(), *bad_wr = nullptr;
+        rc = ibv_post_recv(endpoint->UnsafeQP(), wr, &bad_wr);
+        recv_wr.clear();
+        recv_sge.clear();
+
+        if (rc) {
+            DEBUG("ibv_post_recv error. first bad_wr %lud", bad_wr ? bad_wr->wr_id : 0xffffffff);
+            return rc;
+        }
+    }
+
+    return 0;
 }

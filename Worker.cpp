@@ -8,30 +8,44 @@
 
 using namespace universe;
 
-Worker::Worker(const std::string &address) : address(address) {
-    std::shared_ptr<grpc::Channel> channel = grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
+bool Worker::JoinGroup(const std::string &address)  {
+    channel = grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
     stub = Controller::NewStub(channel);
     global_map = std::make_shared<GlobalMap>();
-}
 
-bool Worker::JoinGroup() {
+    device = rdma::Device::Open();
+    if (!device) {
+        return false;
+    }
+
+    endpoint = device->CreateEndPoint(IBV_QPT_RC);
+    if (!endpoint) {
+        return false;
+    }
+
     grpc::ClientContext context;
     grpc::Status status;
     JoinGroupRequest request;
     JoinGroupReply reply;
 
-    request.set_peer(address);
-    request.set_qpn(0); // used in RDMA invocation
-    request.set_lid(0); // used in RDMA invocation
+    request.set_qpn(endpoint->QPN()); // used in RDMA invocation
+    request.set_lid(device->LID());   // used in RDMA invocation
     status = stub->JoinGroup(&context, request, &reply);
     if (!status.ok()) {
         std::cout << status.error_code() << ": " << status.error_message() << std::endl;
         return false;
     }
+
+    rank = reply.rank();
     return true;
 }
 
-uint64_t Worker::AllocPage(uint64_t size, uint64_t align) {
+int Worker::AllocPage(uint64_t size, uint64_t align) {
+    auto mr = device->Malloc(size, true, align);
+    if (!endpoint) {
+        return -1;
+    }
+
     grpc::ClientContext context;
     grpc::Status status;
     AllocPageRequest request;
@@ -39,17 +53,22 @@ uint64_t Worker::AllocPage(uint64_t size, uint64_t align) {
 
     request.set_size(size);
     request.set_align(align);
-    request.set_owner_peer(address);
-    request.set_owner_addr(0);
-    request.set_owner_key(0);
+    request.set_owner_rank(rank);
+    request.set_owner_addr(mr->VirtualAddress());
+    request.set_owner_key(mr->Key());
 
     status = stub->AllocPage(&context, request, &reply);
     if (!status.ok()) {
         std::cout << status.error_code() << ": " << status.error_message() << std::endl;
-        return 0xffffffff;
+        return -1;
     }
 
-    return reply.shared_addr();
+    {
+        std::unique_lock<std::mutex> guard(managed_memory_lock);
+        managed_memory[reply.page_id()] = mr;
+    }
+
+    return reply.page_id();
 }
 
 bool Worker::SyncMap() {
@@ -67,13 +86,13 @@ bool Worker::SyncMap() {
     global_map->Clear();
 
     for (auto &v : reply.workers()) {
-        global_map->AddWorker(v.peer(), v.qpn(), static_cast<uint16_t>(v.lid() & 0xffff));
+        global_map->AddWorker(v.rank(), v.qpn(), static_cast<uint16_t>(v.lid() & 0xffff));
     }
 
     for (auto &v : reply.pages()) {
-        global_map->AddPage(v.shared_addr(), v.size(), v.align(), v.owner_peer());
+        global_map->AddPage(v.page_id(), v.size(), v.align(), v.owner_rank());
         for (auto &u : v.rep_list()) {
-            global_map->AddPageRepInfo(v.shared_addr(), u.peer(), u.addr(), u.key());
+            global_map->AddPageReplica(v.page_id(), u.rank(), u.addr(), u.key());
         }
     }
 

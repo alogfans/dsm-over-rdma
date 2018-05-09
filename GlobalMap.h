@@ -23,32 +23,58 @@ struct GlobalMap {
     struct page_desc {
         uint64_t size;
         uint64_t align;
-        std::string owner_peer;
-
-        std::map<std::string, page_rep_desc> rep_list;
+        int owner_rank;
+        std::map<int, page_rep_desc> rep_list;
     };
 
-    std::map<std::string, worker_desc> worker_map;  // peer -> worker_desc
-    std::map<uint64_t, page_desc> page_map;         // shared_addr -> page_desc
+    std::mutex lock;
+    std::map<int, worker_desc> worker_map;  // peer -> worker_desc
+    std::map<int, page_desc> page_map;      // shared_addr -> page_desc
 
 public:
     void Clear() {
+        std::unique_lock<std::mutex> guard(lock);
         worker_map.clear();
         page_map.clear();
     }
 
-    void AddWorker(const std::string &peer, uint32_t qpn, uint16_t lid) {
-        worker_map[peer] = worker_desc{qpn, lid};
+    void AddWorker(int rank, uint32_t qpn, uint16_t lid) {
+        std::unique_lock<std::mutex> guard(lock);
+        worker_map[rank] = worker_desc{qpn, lid};
     }
 
-    void AddPage(uint64_t shared_addr, uint64_t size, uint64_t align, const std::string &owner_peer) {
-        page_map[shared_addr].size = size;
-        page_map[shared_addr].align = align;
-        page_map[shared_addr].owner_peer = owner_peer;
+    void AddPage(int page_id, uint64_t size, uint64_t align, int owner_rank) {
+        std::unique_lock<std::mutex> guard(lock);
+        page_map[page_id].size = size;
+        page_map[page_id].align = align;
+        page_map[page_id].owner_rank = owner_rank;
     }
 
-    void AddPageRepInfo(uint64_t shared_addr, const std::string &peer, uint64_t addr, uint32_t key) {
-        page_map[shared_addr].rep_list[peer] = page_rep_desc{addr, key};
+    void AddPageReplica(int page_id, int replica_rank, uint64_t addr, uint32_t key) {
+        std::unique_lock<std::mutex> guard(lock);
+        page_map[page_id].rep_list[replica_rank] = page_rep_desc{addr, key};
+    }
+
+    void DumpGlobalMap() {
+        std::unique_lock<std::mutex> guard(lock);
+        std::cout << "Global Map dump:" << std::endl;
+        std::cout << "*** Workers ***" << std::endl;
+        for (auto &v : worker_map) {
+            std::cout << "rank " << v.first << ", QPN " << v.second.qpn << ", LID " << v.second.lid << std::endl;
+        }
+
+        std::cout << "*** Pages ***" << std::endl;
+        for (auto &v : page_map) {
+            std::cout << "page_id " << v.first << ", size " << v.second.size << ", align " << v.second.align
+                      << ", owner_rank " << v.second.owner_rank << std::endl;
+
+            for (auto &u : v.second.rep_list) {
+                std::cout << "\t replica_rank " << u.first << ", key "
+                          << u.second.key << ", addr " << u.second.addr << std::endl;
+            }
+        }
+
+        std::cout << "*** Dump Completed ***" << std::endl;
     }
 };
 

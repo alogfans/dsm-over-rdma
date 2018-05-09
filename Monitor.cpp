@@ -18,71 +18,65 @@ void Monitor::Run(const std::string &address) {
 }
 
 void Monitor::Shutdown() {
-    if (server != NULL) {
+    if (server) {
         server->Shutdown();
-        server = NULL;
+        server = nullptr;
     }
 }
 
 MonitorImpl::MonitorImpl() {
-    global_map = std::make_shared<GlobalMap>();
-    page_counter.store(0);
+    next_page_id.store(0);
+    next_rank.store(0);
 }
 
 grpc::Status MonitorImpl::JoinGroup(grpc::ServerContext *context, const JoinGroupRequest *request,
                                     JoinGroupReply *response) {
-    const std::string &peer = request->peer();
-
-    if (global_map->worker_map.find(peer) != global_map->worker_map.end()) {
-        printf("peer %s has joined before.\n", peer.c_str());
-        return grpc::Status::CANCELLED;
-    }
-
-    global_map->AddWorker(peer, request->qpn(), static_cast<uint16_t>(request->lid() & 0xffff));
-
+    int rank = next_rank.fetch_add(1);
+    global_map->AddWorker(rank, request->qpn(), static_cast<uint16_t>(request->lid() & 0xffff));
+    response->set_rank(rank);
     return grpc::Status::OK;
 }
 
 grpc::Status MonitorImpl::AllocPage(grpc::ServerContext *context, const universe::AllocPageRequest *request,
                                     universe::AllocPageReply *response) {
-    const uint64_t shared_addr = page_counter.fetch_add(request->size());
-    if (global_map->page_map.find(shared_addr) != global_map->page_map.end()) {
-        printf("(internal error) shared page with address %016X has joined before.\n", shared_addr);
-        return grpc::Status::CANCELLED;
+    const int page_id = next_page_id.fetch_add(1);
+    const int owner_rank = request->owner_rank();
+
+    {
+        std::unique_lock<std::mutex> guard(global_map->lock);
+        if (global_map->worker_map.find(owner_rank) == global_map->worker_map.end()) {
+            printf("peer %d not joined before.\n", request->owner_rank());
+            return grpc::Status::CANCELLED;
+        }
     }
 
-    const std::string &owner_peer = request->owner_peer();
-    if (global_map->worker_map.find(owner_peer) == global_map->worker_map.end()) {
-        printf("peer %s not joined before.\n", owner_peer.c_str());
-        return grpc::Status::CANCELLED;
-    }
+    global_map->AddPage(page_id, request->size(), request->align(), owner_rank);
+    global_map->AddPageReplica(page_id, owner_rank, request->owner_addr(), request->owner_key());
 
-    global_map->AddPage(shared_addr, request->size(), request->align(), owner_peer);
-    global_map->AddPageRepInfo(shared_addr, owner_peer, request->owner_addr(), request->owner_key());
-
-    response->set_shared_addr(shared_addr);
+    response->set_page_id(page_id);
     return grpc::Status::OK;
 }
 
 grpc::Status MonitorImpl::SyncMap(grpc::ServerContext *context, const universe::SyncMapRequest *request,
                                   universe::SyncMapReply *response) {
+    std::unique_lock<std::mutex> guard(global_map->lock);
     for (auto &v : global_map->worker_map) {
         WorkerDesc *worker = response->add_workers();
-        worker->set_peer(v.first);
+        worker->set_rank(v.first);
         worker->set_qpn(v.second.qpn);
         worker->set_lid(v.second.lid);
     }
 
     for (auto &v : global_map->page_map) {
         PageDesc *page = response->add_pages();
-        page->set_shared_addr(v.first);
+        page->set_page_id(v.first);
         page->set_size(v.second.size);
         page->set_align(v.second.align);
-        page->set_owner_peer(v.second.owner_peer);
+        page->set_owner_rank(v.second.owner_rank);
 
         for (auto &u : v.second.rep_list) {
             PageRepList *entry = page->add_rep_list();
-            entry->set_peer(u.first);
+            entry->set_rank(u.first);
             entry->set_key(u.second.key);
             entry->set_addr(u.second.addr);
         }

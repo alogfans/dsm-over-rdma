@@ -9,47 +9,44 @@ service Controller {
 }
 
 message JoinGroupRequest {
-    string peer = 1; // peer name
-
     uint32 qpn = 2;
     uint32 lid = 3;  // only lower 16 bits used
 }
 
 message JoinGroupReply {
-    uint32 err_code = 1;
+    int32 rank = 1;
 }
 
 message AllocPageRequest {
     uint64 size = 2;          // page size
     uint64 align = 3;         // page alignment
-    string owner_peer = 4;    // owner peer
+    int32 owner_rank = 4;    // owner peer
     uint64 owner_addr = 5;
     uint32 owner_key = 6;
 }
 
 message AllocPageReply {
-    uint64 shared_addr = 1;   // identifier of shared page
-    uint32 err_code = 2;
+    int32 page_id = 1;   // identifier of shared page
 }
 
 message WorkerDesc {
-    string peer = 1; // peer name
+    int32 rank = 1; // peer name
     uint32 qpn = 2;
     uint32 lid = 3;  // only lower 16 bits used
     bytes  gid = 4;  // uint8[16]
 }
 
 message PageRepList {
-    string peer = 1;
+    int32 rank = 1;
     uint64 addr = 2;
     uint32 key = 3;
 }
 
 message PageDesc {
-    uint64 shared_addr = 1;   // identifier of shared page
+    int32 page_id = 1;   // identifier of shared page
     uint64 size = 2;          // page size
     uint64 align = 3;         // page alignment
-    string owner_peer = 4;    // owner peer
+    int32 owner_rank = 4;    // owner peer
     repeated PageRepList rep_list = 5;  // replication list
 }
 
@@ -58,7 +55,6 @@ message SyncMapRequest {
 }
 
 message SyncMapReply {
-    uint32 err_code = 1;
-    repeated WorkerDesc workers = 2;
-    repeated PageDesc pages = 3;
+    repeated WorkerDesc workers = 1;
+    repeated PageDesc pages = 2;
 }

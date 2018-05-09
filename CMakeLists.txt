@@ -6,7 +6,7 @@ find_package(Protobuf REQUIRED)
 set(CMAKE_CXX_FLAGS "-std=c++11 -O3")
 link_libraries(protobuf grpc++ rdmacm ibverbs)
 
-set(PROTO_GENERATOR /usr/bin/grpc_cpp_plugin)
+set(PROTO_GENERATOR /usr/local/bin/grpc_cpp_plugin)
 
 set(PROTO_PATH "${CMAKE_SOURCE_DIR}/protos")
 set(PROTO_FILES "${PROTO_PATH}/controller")

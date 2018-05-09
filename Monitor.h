@@ -30,7 +30,8 @@ namespace universe {
                              SyncMapReply* response) override ;
 
     private:
-        std::atomic<uint64_t> page_counter;
+        std::atomic<int> next_page_id;
+        std::atomic<int> next_rank;
         std::shared_ptr<GlobalMap> global_map;
     };
 
