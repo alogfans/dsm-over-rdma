@@ -4,8 +4,11 @@ package universe;
 
 service Controller {
     rpc JoinGroup(JoinGroupRequest) returns (JoinGroupReply) {}
+    rpc LeaveGroup(LeaveGroupRequest) returns (LeaveGroupReply) {}
     rpc AllocPage(AllocPageRequest) returns (AllocPageReply) {}
+    rpc FreePage(FreePageRequest) returns (FreePageReply) {}
     rpc SyncMap(SyncMapRequest) returns (SyncMapReply) {}
+    // rpc Heartbeat()
 }
 
 message JoinGroupRequest {
@@ -51,10 +54,26 @@ message PageDesc {
 }
 
 message SyncMapRequest {
-    uint32 epoch = 1;
+    // nothing
 }
 
 message SyncMapReply {
     repeated WorkerDesc workers = 1;
     repeated PageDesc pages = 2;
+}
+
+message FreePageRequest {
+    int32 page_id = 1;
+}
+
+message FreePageReply {
+    // nothing
+}
+
+message LeaveGroupRequest {
+    int32 rank = 1;
+}
+
+message LeaveGroupReply {
+    // nothing
 }

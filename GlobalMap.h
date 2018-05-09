@@ -40,7 +40,8 @@ public:
 
     void AddWorker(int rank, uint32_t qpn, uint16_t lid) {
         std::unique_lock<std::mutex> guard(lock);
-        worker_map[rank] = worker_desc{qpn, lid};
+        worker_map[rank].qpn = qpn;
+        worker_map[rank].lid = lid;
     }
 
     void AddPage(int page_id, uint64_t size, uint64_t align, int owner_rank) {
@@ -52,7 +53,8 @@ public:
 
     void AddPageReplica(int page_id, int replica_rank, uint64_t addr, uint32_t key) {
         std::unique_lock<std::mutex> guard(lock);
-        page_map[page_id].rep_list[replica_rank] = page_rep_desc{addr, key};
+        page_map[page_id].rep_list[replica_rank].addr = addr;
+        page_map[page_id].rep_list[replica_rank].key = key;
     }
 
     void DumpGlobalMap() {

@@ -29,6 +29,12 @@ namespace universe {
         grpc::Status SyncMap(grpc::ServerContext* context, const SyncMapRequest* request,
                              SyncMapReply* response) override ;
 
+        grpc::Status LeaveGroup(grpc::ServerContext* context, const LeaveGroupRequest* request,
+                                LeaveGroupReply* response);
+
+        grpc::Status FreePage(grpc::ServerContext* context, const FreePageRequest* request,
+                              FreePageReply* response);
+
     private:
         std::atomic<int> next_page_id;
         std::atomic<int> next_rank;

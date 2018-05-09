@@ -16,12 +16,13 @@ int main() {
         worker.AllocPage(1024, 64);
     }
 
-    int delay = 60;
+    int delay = 10;
     while (delay--) {
         worker.SyncMap();
         worker.DumpGlobalMap();
         sleep(1);
     }
 
+    worker.LeaveGroup();
     return 0;
 }

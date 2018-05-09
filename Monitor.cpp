@@ -27,6 +27,7 @@ void Monitor::Shutdown() {
 MonitorImpl::MonitorImpl() {
     next_page_id.store(0);
     next_rank.store(0);
+    global_map = std::make_shared<GlobalMap>();
 }
 
 grpc::Status MonitorImpl::JoinGroup(grpc::ServerContext *context, const JoinGroupRequest *request,
@@ -82,5 +83,37 @@ grpc::Status MonitorImpl::SyncMap(grpc::ServerContext *context, const universe::
         }
     }
 
+    return grpc::Status::OK;
+}
+
+grpc::Status MonitorImpl::LeaveGroup(grpc::ServerContext* context, const LeaveGroupRequest* request,
+                                     LeaveGroupReply* response) {
+    std::unique_lock<std::mutex> guard(global_map->lock);
+    int rank = request->rank();
+    if (global_map->worker_map.find(rank) == global_map->worker_map.end()) {
+        // not exist, so we don't need to handle it
+        return grpc::Status::OK;
+    }
+
+    global_map->worker_map.erase(rank);
+
+    for (auto &v : global_map->page_map) {
+        if (v.second.owner_rank == rank) {
+            global_map->page_map.erase(v.first);
+        }
+    }
+
+    return grpc::Status::OK;
+}
+
+grpc::Status MonitorImpl::FreePage(grpc::ServerContext* context, const FreePageRequest* request,
+                                   FreePageReply* response) {
+    std::unique_lock<std::mutex> guard(global_map->lock);
+    int page_id = request->page_id();
+    if (global_map->page_map.find(page_id) == global_map->page_map.end()) {
+        // not exist, so we don't need to handle it
+        return grpc::Status::OK;
+    }
+    global_map->page_map.erase(page_id);
     return grpc::Status::OK;
 }

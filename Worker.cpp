@@ -8,19 +8,19 @@
 
 using namespace universe;
 
-bool Worker::JoinGroup(const std::string &address)  {
+int Worker::JoinGroup(const std::string &address)  {
     channel = grpc::CreateChannel(address, grpc::InsecureChannelCredentials());
     stub = Controller::NewStub(channel);
     global_map = std::make_shared<GlobalMap>();
 
     device = rdma::Device::Open();
     if (!device) {
-        return false;
+        return -1;
     }
 
     endpoint = device->CreateEndPoint(IBV_QPT_RC);
     if (!endpoint) {
-        return false;
+        return -1;
     }
 
     grpc::ClientContext context;
@@ -33,10 +33,26 @@ bool Worker::JoinGroup(const std::string &address)  {
     status = stub->JoinGroup(&context, request, &reply);
     if (!status.ok()) {
         std::cout << status.error_code() << ": " << status.error_message() << std::endl;
-        return false;
+        return -1;
     }
 
     rank = reply.rank();
+    return rank;
+}
+
+bool Worker::LeaveGroup() {
+    grpc::ClientContext context;
+    grpc::Status status;
+    LeaveGroupRequest request;
+    LeaveGroupReply reply;
+
+    request.set_rank(rank);
+    status = stub->LeaveGroup(&context, request, &reply);
+    if (!status.ok()) {
+        std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+        return false;
+    }
+
     return true;
 }
 
@@ -69,6 +85,22 @@ int Worker::AllocPage(uint64_t size, uint64_t align) {
     }
 
     return reply.page_id();
+}
+
+bool Worker::FreePage(int page_id) {
+    grpc::ClientContext context;
+    grpc::Status status;
+    FreePageRequest request;
+    FreePageReply reply;
+
+    request.set_page_id(page_id);
+    status = stub->FreePage(&context, request, &reply);
+    if (!status.ok()) {
+        std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+        return false;
+    }
+
+    return true;
 }
 
 bool Worker::SyncMap() {

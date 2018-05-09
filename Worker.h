@@ -16,9 +16,11 @@
 namespace universe {
     class Worker {
     public:
-        bool JoinGroup(const std::string &address);
+        int JoinGroup(const std::string &address);
+        bool LeaveGroup();
         int Rank() const { return rank; }
         int AllocPage(uint64_t size, uint64_t align);
+        bool FreePage(int page_id);
         // int Barrier(int barrier_id);
         // uint8_t *GetPage(int page_id);
         bool SyncMap();
