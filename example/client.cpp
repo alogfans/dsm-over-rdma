@@ -11,18 +11,15 @@ using namespace rdma;
 
 int main() {
     Worker worker;
-    int rank = worker.JoinGroup("tstore04:8080");
+    int rank = worker.JoinGroup("tstore04:12580");
     if (rank % 2 == 0) {
         worker.AllocPage(1024, 64);
     }
 
-    int delay = 10;
-    while (delay--) {
-        worker.SyncMap();
-        worker.DumpGlobalMap();
-        sleep(1);
-    }
-
+    worker.Barrier(0);
+    worker.SyncMap();
+    worker.Barrier(1);
+    worker.DumpGlobalMap();
     worker.LeaveGroup();
     return 0;
 }

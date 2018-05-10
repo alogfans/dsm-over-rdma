@@ -117,3 +117,26 @@ grpc::Status MonitorImpl::FreePage(grpc::ServerContext* context, const FreePageR
     global_map->page_map.erase(page_id);
     return grpc::Status::OK;
 }
+
+grpc::Status MonitorImpl::GlobalBarrier(grpc::ServerContext *context, const universe::GlobalBarrierRequest *request,
+                                        universe::GlobalBarrierReply *response) {
+    // TODO better synchronous method
+    const int barrier_id = request->barrier_id();
+    if (barrier_state.find(barrier_id) == barrier_state.end()) {
+        barrier_state[barrier_id] = (int) global_map->worker_map.size();
+    }
+
+    // atomic operation
+    int new_state = barrier_state[barrier_id].fetch_add(-1);
+    if (new_state == 0) {
+        std::unique_lock<std::mutex> guard(barrier_lock);
+        barrier_cond.notify_all();
+    } else {
+        std::unique_lock<std::mutex> guard(barrier_lock);
+        while (barrier_state[barrier_id] != 0) {
+            barrier_cond.wait(guard);
+        }
+    }
+
+    return grpc::Status::OK;
+}

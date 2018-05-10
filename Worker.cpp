@@ -130,3 +130,19 @@ bool Worker::SyncMap() {
 
     return true;
 }
+
+bool Worker::Barrier(int barrier_id) {
+    grpc::ClientContext context;
+    grpc::Status status;
+    GlobalBarrierRequest request;
+    GlobalBarrierReply reply;
+
+    request.set_barrier_id(barrier_id);
+    status = stub->GlobalBarrier(&context, request, &reply);
+    if (!status.ok()) {
+        std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+        return false;
+    }
+
+    return true;
+}

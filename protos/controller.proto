@@ -8,6 +8,7 @@ service Controller {
     rpc AllocPage(AllocPageRequest) returns (AllocPageReply) {}
     rpc FreePage(FreePageRequest) returns (FreePageReply) {}
     rpc SyncMap(SyncMapRequest) returns (SyncMapReply) {}
+    rpc GlobalBarrier(GlobalBarrierRequest) returns (GlobalBarrierReply) {}
     // rpc Heartbeat()
 }
 
@@ -75,5 +76,13 @@ message LeaveGroupRequest {
 }
 
 message LeaveGroupReply {
+    // nothing
+}
+
+message GlobalBarrierRequest {
+    int32 barrier_id = 1;
+}
+
+message GlobalBarrierReply {
     // nothing
 }

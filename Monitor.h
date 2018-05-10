@@ -27,15 +27,22 @@ namespace universe {
                                AllocPageReply* response) override;
 
         grpc::Status SyncMap(grpc::ServerContext* context, const SyncMapRequest* request,
-                             SyncMapReply* response) override ;
+                             SyncMapReply* response) override;
 
         grpc::Status LeaveGroup(grpc::ServerContext* context, const LeaveGroupRequest* request,
-                                LeaveGroupReply* response);
+                                LeaveGroupReply* response) override;
 
         grpc::Status FreePage(grpc::ServerContext* context, const FreePageRequest* request,
-                              FreePageReply* response);
+                              FreePageReply* response) override;
+
+        grpc::Status GlobalBarrier(grpc::ServerContext* context, const GlobalBarrierRequest* request,
+                                   GlobalBarrierReply* response) override;
 
     private:
+        std::mutex barrier_lock;
+        std::condition_variable barrier_cond;
+        std::map<int, std::atomic<int> > barrier_state;
+
         std::atomic<int> next_page_id;
         std::atomic<int> next_rank;
         std::shared_ptr<GlobalMap> global_map;
