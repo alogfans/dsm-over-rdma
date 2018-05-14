@@ -7,7 +7,7 @@
 #include <unistd.h>
 #include <infiniband/verbs.h>
 
-#include "RdmaService.h"
+#include "RDMA.h"
 
 using namespace rdma;
 

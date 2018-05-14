@@ -5,70 +5,33 @@ package universe;
 service Controller {
     rpc JoinGroup(JoinGroupRequest) returns (JoinGroupReply) {}
     rpc LeaveGroup(LeaveGroupRequest) returns (LeaveGroupReply) {}
-    rpc AllocPage(AllocPageRequest) returns (AllocPageReply) {}
-    rpc FreePage(FreePageRequest) returns (FreePageReply) {}
-    rpc SyncMap(SyncMapRequest) returns (SyncMapReply) {}
+    rpc CacheWorkerMap(CacheWorkerMapRequest) returns (CacheWorkerMapReply) {}
+
+    // Currently the following is unusable
     rpc GlobalBarrier(GlobalBarrierRequest) returns (GlobalBarrierReply) {}
-    // rpc Heartbeat()
 }
 
 message JoinGroupRequest {
+    int32  rank = 1;
     uint32 qpn = 2;
     uint32 lid = 3;  // only lower 16 bits used
+    uint64 addr = 4;
+    uint32 key = 5;
+    bytes  gid = 6;  // uint8[16], currently unused
 }
 
 message JoinGroupReply {
-    int32 rank = 1;
+    int32 err_code = 1;  // reserved
+    int32 num_of_procs = 2;
 }
 
-message AllocPageRequest {
-    uint64 size = 2;          // page size
-    uint64 align = 3;         // page alignment
-    int32 owner_rank = 4;    // owner peer
-    uint64 owner_addr = 5;
-    uint32 owner_key = 6;
+message CacheWorkerMapRequest {
+    repeated int32 want_rank = 1;
 }
 
-message AllocPageReply {
-    int32 page_id = 1;   // identifier of shared page
-}
-
-message WorkerDesc {
-    int32 rank = 1; // peer name
-    uint32 qpn = 2;
-    uint32 lid = 3;  // only lower 16 bits used
-    bytes  gid = 4;  // uint8[16]
-}
-
-message PageRepList {
-    int32 rank = 1;
-    uint64 addr = 2;
-    uint32 key = 3;
-}
-
-message PageDesc {
-    int32 page_id = 1;   // identifier of shared page
-    uint64 size = 2;          // page size
-    uint64 align = 3;         // page alignment
-    int32 owner_rank = 4;    // owner peer
-    repeated PageRepList rep_list = 5;  // replication list
-}
-
-message SyncMapRequest {
-    // nothing
-}
-
-message SyncMapReply {
-    repeated WorkerDesc workers = 1;
-    repeated PageDesc pages = 2;
-}
-
-message FreePageRequest {
-    int32 page_id = 1;
-}
-
-message FreePageReply {
-    // nothing
+message CacheWorkerMapReply {
+    int32 err_code = 1;  // reserved
+    repeated JoinGroupRequest worker = 2;
 }
 
 message LeaveGroupRequest {
@@ -76,7 +39,7 @@ message LeaveGroupRequest {
 }
 
 message LeaveGroupReply {
-    // nothing
+    int32 err_code = 1;  // reserved
 }
 
 message GlobalBarrierRequest {
@@ -84,5 +47,5 @@ message GlobalBarrierRequest {
 }
 
 message GlobalBarrierReply {
-    // nothing
+    int32 err_code = 1;  // reserved
 }

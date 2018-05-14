@@ -3,6 +3,8 @@ project(universe)
 
 find_package(Protobuf REQUIRED)
 
+include_directories(include protos)
+
 set(CMAKE_CXX_FLAGS "-std=c++11 -O3")
 link_libraries(protobuf grpc++ rdmacm ibverbs)
 
@@ -27,11 +29,11 @@ add_custom_command(
                 "${PROTO_FILES}.proto"
 )
 
-set(SHARED_SOURCES Monitor.cpp Worker.cpp ${PROTO_FILES}.pb.cc ${PROTO_FILES}.grpc.pb.cc)
-set(SHARED_HEADERS Monitor.h Worker.h ${PROTO_FILES}.pb.h ${PROTO_FILES}.grpc.pb.h)
-set(SHARED_FILES ${SHARED_SOURCES} ${SHARED_HEADERS} GlobalMap.h RdmaService.cpp RdmaService.h)
+set(SHARED_SOURCES src/Monitor.cpp src/Worker.cpp ${PROTO_FILES}.pb.cc ${PROTO_FILES}.grpc.pb.cc)
+set(SHARED_HEADERS include/Monitor.h include/Worker.h ${PROTO_FILES}.pb.h ${PROTO_FILES}.grpc.pb.h include/cxxopts.h)
+set(SHARED_FILES ${SHARED_SOURCES} ${SHARED_HEADERS} include/WorkerMap.h src/RDMA.cpp include/RDMA.h)
 
 add_library(universe ${SHARED_FILES} ${SHARED_HEADERS})
 link_libraries(universe)
-add_executable(server example/server.cpp)
-add_executable(client example/client.cpp)
+add_executable(monitor example/monitor_example.cpp)
+add_executable(worker example/worker_example.cpp)
