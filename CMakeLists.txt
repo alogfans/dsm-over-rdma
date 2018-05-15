@@ -29,9 +29,9 @@ add_custom_command(
                 "${PROTO_FILES}.proto"
 )
 
-set(SHARED_SOURCES src/Monitor.cpp src/Worker.cpp ${PROTO_FILES}.pb.cc ${PROTO_FILES}.grpc.pb.cc)
-set(SHARED_HEADERS include/Monitor.h include/Worker.h ${PROTO_FILES}.pb.h ${PROTO_FILES}.grpc.pb.h include/cxxopts.h)
-set(SHARED_FILES ${SHARED_SOURCES} ${SHARED_HEADERS} include/WorkerMap.h src/RDMA.cpp include/RDMA.h)
+set(SHARED_SOURCES src/Monitor.cpp src/Worker.cpp ${PROTO_FILES}.pb.cc ${PROTO_FILES}.grpc.pb.cc src/RDMA.cpp)
+set(SHARED_HEADERS include/Monitor.h include/Worker.h ${PROTO_FILES}.pb.h ${PROTO_FILES}.grpc.pb.h include/cxxopts.h include/WorkerMap.h include/RDMA.h)
+set(SHARED_FILES ${SHARED_SOURCES} ${SHARED_HEADERS})
 
 add_library(universe ${SHARED_FILES} ${SHARED_HEADERS})
 link_libraries(universe)

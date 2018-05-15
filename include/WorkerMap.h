@@ -17,11 +17,13 @@ namespace universe {
         WorkerEntry(uint32_t queue_pair_num,
                     uint16_t local_id,
                     uint64_t local_virt_addr,
-                    uint32_t mem_region_key) :
+                    uint32_t mem_region_key,
+                    uint64_t mem_size) :
                 QueuePairNum(queue_pair_num),
                 LocalID(local_id),
                 LocalVirtAddr(local_virt_addr),
                 MemRegionKey(mem_region_key),
+                MemSize(mem_size),
                 Valid(true) { }
 
     public:
@@ -30,6 +32,7 @@ namespace universe {
         uint16_t    LocalID;
         uint64_t    LocalVirtAddr;
         uint32_t    MemRegionKey;
+        uint64_t    MemSize;
     };
 
     class WorkerMap {
@@ -46,7 +49,8 @@ namespace universe {
                     uint32_t queue_pair_num,
                     uint16_t local_id,
                     uint64_t local_virt_addr,
-                    uint32_t mem_region_key) {
+                    uint32_t mem_region_key,
+                    uint64_t mem_size) {
 
             if (rank < 0 || rank >= num_of_procs) {
                 return false;
@@ -57,7 +61,7 @@ namespace universe {
                 return false;
             }
 
-            worker_map[rank] = WorkerEntry(queue_pair_num, local_id, local_virt_addr, mem_region_key);
+            worker_map[rank] = WorkerEntry(queue_pair_num, local_id, local_virt_addr, mem_region_key, mem_size);
             return true;
         }
 
@@ -89,11 +93,11 @@ namespace universe {
             for (int i = 0; i < num_of_procs; i++) {
                 std::cout << "Rank " << i << " ";
                 if (worker_map[i].Valid) {
-                    std::cout << "QPN" << worker_map[i].QueuePairNum << ", LID" << worker_map[i].LocalID;
-                    std::cout << "LVirtAddr" << worker_map[i].LocalVirtAddr << ", LKey" << worker_map[i].MemRegionKey;
-                    std::cout << std::endl;
+                    std::cout << " QPN " << worker_map[i].QueuePairNum << " LID " << worker_map[i].LocalID;
+                    std::cout << " LVirtAddr " << worker_map[i].LocalVirtAddr << " LKey " << worker_map[i].MemRegionKey;
+                    std::cout << " MemSize " << worker_map[i].MemSize << std::endl;
                 } else {
-                    std::cout << "not ready" << std::endl;
+                    std::cout << " Not ready" << std::endl;
                 }
             }
             std::cout << std::endl;

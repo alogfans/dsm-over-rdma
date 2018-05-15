@@ -66,8 +66,17 @@ int main(int argc, char **argv) {
         exit(-1);
     }
 
-    // do something stuff that user defined
-    std::this_thread::sleep_for(std::chrono::seconds(10));
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    int var = 1000 + rank;
+    worker.Store(var, worker.GlobalAddress(0, 1 - rank));
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    int result = worker.Load<int>(worker.GlobalAddress(0));
+    std::cout << rank << ":" << result << std::endl;
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
 
     worker.Disconnect();
     return 0;

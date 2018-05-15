@@ -43,7 +43,8 @@ grpc::Status MonitorImpl::JoinGroup(grpc::ServerContext *context,
                                      request->qpn(),
                                      static_cast<uint16_t>(request->lid() & 0xffff),
                                      request->addr(),
-                                     request->key());
+                                     request->key(),
+                                     request->size());
     if (!result) {
         return grpc::Status(grpc::INVALID_ARGUMENT, "rank has been registered");
     }
@@ -80,6 +81,7 @@ grpc::Status MonitorImpl::CacheWorkerMap(grpc::ServerContext* context,
         entry->set_lid(worker_map_copy[rank].LocalID);
         entry->set_addr(worker_map_copy[rank].LocalVirtAddr);
         entry->set_key(worker_map_copy[rank].MemRegionKey);
+        entry->set_size(worker_map_copy[rank].MemSize);
     }
     return grpc::Status::OK;
 }

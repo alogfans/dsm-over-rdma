@@ -18,6 +18,7 @@ message JoinGroupRequest {
     uint64 addr = 4;
     uint32 key = 5;
     bytes  gid = 6;  // uint8[16], currently unused
+    uint64 size = 7;
 }
 
 message JoinGroupReply {

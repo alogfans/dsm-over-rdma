@@ -37,6 +37,7 @@ namespace rdma {
         int Poll(std::vector<ibv_wc> &replies, int timeout_ms = -1);
 
         std::shared_ptr<MemoryRegion> Malloc(size_t n, bool zero = false, uint64_t align = 16);
+        std::shared_ptr<MemoryRegion> Wrap(uint8_t *buf, size_t n);
 
         uint16_t LID() const;
         const std::vector<uint8_t> GID(int gid_index = 0) const;
@@ -64,6 +65,7 @@ namespace rdma {
         EndPoint(const EndPoint &) = delete;
         EndPoint &operator=(const EndPoint &) = delete;
 
+        int Reset();
         int RegisterRemote(uint16_t remote_lid, uint32_t remote_qpn);
         int JoinMulticast(const std::vector<uint8_t> &remote_gid, uint16_t remote_lid);
         int LeaveMulticast(const std::vector<uint8_t> &remote_gid, uint16_t remote_lid);
@@ -90,11 +92,12 @@ namespace rdma {
 
     class MemoryRegion {
     public:
-        explicit MemoryRegion(uint8_t *addr, size_t n, struct ibv_mr *mr) : addr(addr), n(n), mr(mr) { }
+        explicit MemoryRegion(uint8_t *addr, size_t n, struct ibv_mr *mr, bool free_when_exit = true)
+                : addr(addr), n(n), mr(mr), free_when_exit(free_when_exit) { }
 
         virtual ~MemoryRegion() {
             if (mr) { ibv_dereg_mr(mr); }
-            if (addr) { free(addr); }
+            if (addr && free_when_exit) { free(addr); }
         }
 
         MemoryRegion(const MemoryRegion &) = delete;
@@ -102,6 +105,7 @@ namespace rdma {
 
         uint64_t VirtualAddress() const { return (uintptr_t) addr; }
         uint32_t Key() const { return mr->lkey; }
+        uint64_t Size() const { return n; }
         uint8_t *Get() const { return addr; }
         uint8_t &operator[](int i) { return addr[i]; }
 
@@ -109,6 +113,7 @@ namespace rdma {
         uint8_t *addr;
         size_t n;
         struct ibv_mr *mr;
+        bool free_when_exit;
     };
 
     class WorkBatch {

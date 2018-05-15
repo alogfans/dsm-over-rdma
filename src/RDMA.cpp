@@ -160,9 +160,10 @@ int Device::Poll(std::vector<ibv_wc> &replies, int timeout_ms) {
 
     if (event.data.fd == channel->fd) {
         ibv_cq *cq = nullptr;
+        void *cq_ctx = nullptr;
         ibv_wc wc = { };
 
-        if (ibv_get_cq_event(channel, &cq, nullptr)) {
+        if (ibv_get_cq_event(channel, &cq, &cq_ctx)) {
             DEBUG("ibv_get_cq_event failed");
             return -1;
         }
@@ -228,6 +229,16 @@ std::shared_ptr<MemoryRegion> Device::Malloc(size_t n, bool zero, uint64_t align
     }
 
     return std::make_shared<MemoryRegion>(byteBuffer, n, mr);
+}
+
+std::shared_ptr<MemoryRegion> Device::Wrap(uint8_t *buf, size_t n) {
+    ibv_mr *mr = ibv_reg_mr(pd, buf, n, FullAccessPermFlags);
+    if (!mr) {
+        DEBUG("ibv_reg_mr failed.");
+        return nullptr;
+    }
+
+    return std::make_shared<MemoryRegion>(buf, n, mr, false);
 }
 
 uint16_t Device::LID() const {
@@ -385,7 +396,15 @@ int EndPoint::setRTS(ibv_qp *qp) {
     return ibv_modify_qp(qp, &attr, flags);
 }
 
-int EndPoint::RegisterRemote(uint16_t remote_lid, uint32_t remote_qpn){
+int EndPoint::Reset() {
+    ibv_qp_attr attr = { };
+    int flags = IBV_QP_STATE;
+    memset(&attr, 0, sizeof(attr));
+    attr.qp_state = IBV_QPS_RESET;
+    return ibv_modify_qp(qp, &attr, flags);
+}
+
+int EndPoint::RegisterRemote(uint16_t remote_lid, uint32_t remote_qpn) {
     if (setInit(qp, ib_port)) {
         DEBUG("set_queue_pair_init failed.");
         return -1;
