@@ -6,11 +6,11 @@
 #define UNIVERSE_MONITOR_H
 
 #include <string>
-#include <grpcpp/grpcpp.h>
+#include <grpc++/grpc++.h>
 #include <atomic>
 
-#include "controller.grpc.pb.h"
-#include "controller.pb.h"
+#include "message.grpc.pb.h"
+#include "message.pb.h"
 #include "WorkerMap.h"
 
 namespace universe {

@@ -7,8 +7,9 @@ service Controller {
     rpc LeaveGroup(LeaveGroupRequest) returns (LeaveGroupReply) {}
     rpc CacheWorkerMap(CacheWorkerMapRequest) returns (CacheWorkerMapReply) {}
 
-    // Currently the following is unusable
-    rpc GlobalBarrier(GlobalBarrierRequest) returns (GlobalBarrierReply) {}
+    rpc Barrier(BarrierRequest) returns (BarrierReply) {}
+    rpc AcquireLock(AcquireLockRequest) returns (AcquireLockReply) {}
+    rpc ReleaseLock(ReleaseLockRequest) returns (ReleaseLockReply) {}
 }
 
 message JoinGroupRequest {
@@ -43,10 +44,27 @@ message LeaveGroupReply {
     int32 err_code = 1;  // reserved
 }
 
-message GlobalBarrierRequest {
-    int32 barrier_id = 1;
+message BarrierRequest {
+    int32 rank = 1;
+    int32 barrier_id = 2;
 }
 
-message GlobalBarrierReply {
-    int32 err_code = 1;  // reserved
+message BarrierReply {
+    int32 err_code = 1;
+}
+
+message AcquireLockRequest {
+
+}
+
+message AcquireLockReply {
+
+}
+
+message ReleaseLockRequest {
+
+}
+
+message ReleaseLockReply {
+
 }

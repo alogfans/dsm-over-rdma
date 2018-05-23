@@ -12,7 +12,7 @@
 #include <vector>
 #include <atomic>
 
-#define DEBUG(format,...) printf("ERR " __FILE__":%04d " format " (errno %d %s)\n", __LINE__, ##__VA_ARGS__, errno, strerror(errno))
+#include "Logger.h"
 
 namespace rdma {
     class EndPoint;
