@@ -50,6 +50,16 @@ int main(int argc, char **argv) {
     uint64_t result = worker.Load<uint64_t>(worker.GlobalAddress(0));
     std::cout << rank << ":" << result << std::endl;
 
+    worker.Lock(worker.GlobalAddress(32, 0));
+    std::cout << "enter lock region" << std::endl;
+    uint64_t data = worker.Load<uint64_t>(worker.GlobalAddress(40, 0));
+    std::cout << rank << ":" << data << std::endl;
+    worker.Store(data + 512, worker.GlobalAddress(40, 0));
+    worker.Unlock(worker.GlobalAddress(32, 0));
+
+    result = worker.Load<uint64_t>(worker.GlobalAddress(40, 0));
+    std::cout << rank << ":" << result << std::endl;
+
     std::cout << "Worker terminated." << std::endl;
 
     worker.Disconnect();
