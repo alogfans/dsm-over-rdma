@@ -6,71 +6,52 @@
 #include <unistd.h>
 #include <thread>
 #include "Worker.h"
-#include "cxxopts.h"
+#include "CmdParser.h"
 
 using namespace universe;
 using namespace rdma;
 
-int rank = 0;
-uint64_t memory_size = 16;
-std::string backend_server = "localhost:10086";
+static int rank = 0;
+static uint64_t memory_size = 16;
+static std::string backend_server = "localhost:10086";
 
 int parse_arguments(int argc, char **argv) {
-    try {
-        cxxopts::Options options(argv[0], "Distributed shared CPU/GPU memory (Worker)");
-        options.add_options()
-                ("s,server", "Backend server hostname", cxxopts::value<std::string>(backend_server))
-                ("m,memory-size", "Memory size in MB", cxxopts::value<uint64_t>(memory_size))
-                ("r,rank", "Rank of this node, must be lower than num_of_procs in monitor side", cxxopts::value<int>(rank))
-                ("h,help", "Print help information");
-
-        auto result = options.parse(argc, argv);
-
-        if (result.count("help")) {
-            std::cout << options.help() << std::endl;
-            exit(0);
-        }
-
-        if (result.count("server")) {
-            backend_server = result["server"].as<std::string>();
-        }
-
-        if (result.count("rank")) {
-            rank = result["rank"].as<int>();
-        }
-
-        if (result.count("memory")) {
-            memory_size = result["memory"].as<uint64_t>();
-        }
-
-    } catch (const cxxopts::OptionException& e) {
-        std::cout << "error parsing options: " << e.what() << std::endl;
-        exit(1);
-    }
-
+    CLI::App app{"Distributed shared CPU/GPU memory (Worker)"};
+    app.add_option("-s,--server", backend_server, "Backend server hostname");
+    app.add_option("-m,--mem-size", memory_size, "Memory size in megabytes");
+    app.add_option("-r,--rank", rank, "Rank of this node, must be lower than num_of_procs in monitor side");
+    app.set_help_flag("-h,--help", "Print help information");
+    CLI11_PARSE(app, argc, argv);
     return 0;
 }
 
-int main(int argc, char **argv) {
+int prepare_worker(Worker &worker, int argc, char **argv) {
     parse_arguments(argc, argv);
-    Worker worker;
     if (!worker.Connect(backend_server, rank, memory_size * 1024 * 1024, 64)) {
         std::cout << "execution error." << std::endl;
         exit(-1);
     }
 
-    std::cout << "rank " << worker.Rank() << ", num_of_procs " << worker.NumOfProcs() << std::endl;
-
-    if (!worker.WaitUntilReady(1000, 100, true)) {
+    if (!worker.WaitUntilReady(200, 100, false)) {
         std::cout << "execution error." << std::endl;
         exit(-1);
     }
+}
+
+int main(int argc, char **argv) {
+    Worker worker;
+    prepare_worker(worker, argc, argv);
+
+    std::cout << "Worker ready." << std::endl;
 
     int var = 1000 + rank;
     worker.Store(var, worker.GlobalAddress(0, 1 - rank));
-    worker.Barrier(worker.GlobalAddress(10, 0));
-    int result = worker.Load<int>(worker.GlobalAddress(0));
+    worker.Barrier(worker.GlobalAddress(24, 0));
+    uint64_t result = worker.Load<uint64_t>(worker.GlobalAddress(0));
     std::cout << rank << ":" << result << std::endl;
+
+    std::cout << "Worker terminated." << std::endl;
+
     worker.Disconnect();
     return 0;
 }

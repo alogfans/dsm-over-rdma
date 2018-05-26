@@ -14,7 +14,7 @@ namespace universe {
     public:
         WorkerEntry() : Valid(false) { }
 
-        WorkerEntry(uint32_t queue_pair_num,
+        WorkerEntry(const std::vector<uint32_t> &queue_pair_num,
                     uint16_t local_id,
                     uint64_t local_virt_addr,
                     uint32_t mem_region_key,
@@ -27,12 +27,12 @@ namespace universe {
                 Valid(true) { }
 
     public:
-        bool        Valid;
-        uint32_t    QueuePairNum;
-        uint16_t    LocalID;
-        uint64_t    LocalVirtAddr;
-        uint32_t    MemRegionKey;
-        uint64_t    MemSize;
+        bool                  Valid;
+        std::vector<uint32_t> QueuePairNum;
+        uint16_t              LocalID;
+        uint64_t              LocalVirtAddr;
+        uint32_t              MemRegionKey;
+        uint64_t              MemSize;
     };
 
     class WorkerMap {
@@ -46,7 +46,7 @@ namespace universe {
         }
 
         bool insert(int rank,
-                    uint32_t queue_pair_num,
+                    const std::vector<uint32_t> &queue_pair_num,
                     uint16_t local_id,
                     uint64_t local_virt_addr,
                     uint32_t mem_region_key,
@@ -89,18 +89,7 @@ namespace universe {
         }
 
         void dump() {
-            std::lock_guard<std::mutex> guard(mutex);
-            for (int i = 0; i < num_of_procs; i++) {
-                std::cout << "Rank " << i << " ";
-                if (worker_map[i].Valid) {
-                    std::cout << " QPN " << worker_map[i].QueuePairNum << " LID " << worker_map[i].LocalID;
-                    std::cout << " LVirtAddr " << worker_map[i].LocalVirtAddr << " LKey " << worker_map[i].MemRegionKey;
-                    std::cout << " MemSize " << worker_map[i].MemSize << std::endl;
-                } else {
-                    std::cout << " Not ready" << std::endl;
-                }
-            }
-            std::cout << std::endl;
+            std::cout << "Not implemented." << std::endl;
         }
 
         void snapshot(std::vector<WorkerEntry> &worker_map_copy) {

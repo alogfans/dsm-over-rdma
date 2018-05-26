@@ -14,10 +14,12 @@
 #include "WorkerMap.h"
 #include "RDMA.h"
 
+#define PAGESIZE (4 * 1024 * 1024)
+
 namespace universe {
     class Worker {
     public:
-        Worker() : rank(-1), num_procs(0), endpoint_peer_rank(-1) { }
+        Worker() : rank(-1), num_procs(0) { }
         bool Connect(const std::string &address, int rank, uint64_t size, uint64_t align);
         bool WaitUntilReady(int interval_ms, int max_attempt, bool dump = false);
         bool UpdateWorkerMap();
@@ -30,75 +32,15 @@ namespace universe {
         void Lock(uint64_t global_addr);
         void Unlock(uint64_t global_addr);
 
-        void Acquire();
-        void Release();
-
         template <typename T>
-        void Store(const T& object, uint64_t global_addr, std::memory_order order = std::memory_order::memory_order_release) {
-            if (order == std::memory_order::memory_order_acq_rel || order == std::memory_order::memory_order_release)
-                Release();
-
-            uint64_t local_addr;
-            int target_rank;
-            if (!locate_global_addr(global_addr, target_rank, local_addr)) {
-                return;
-            }
-
-            if (target_rank == rank) {
-                memcpy(&memory->Get()[local_addr], &object, sizeof(T));
-            } else {
-                connect_peer(target_rank);
-                auto wrapper = device->Wrap((uint8_t *) &object, sizeof(T));
-                ASSERT(wrapper);
-
-                rdma::WorkBatch batch(endpoint);
-                batch.Write(rdma::WorkBatch::PathDesc(wrapper, 0),
-                            rdma::WorkBatch::PathDesc(worker_map[target_rank].LocalVirtAddr,
-                                                      worker_map[target_rank].MemRegionKey),
-                            (uint32_t) wrapper->Size());
-
-                ASSERT(!batch.Commit());
-                ASSERT(!device->Poll(-1));
-            }
-
-            if (order == std::memory_order::memory_order_acq_rel || order == std::memory_order::memory_order_acquire)
-                Acquire();
+        void Store(const T& object, uint64_t global_addr) {
+            naive_store((uint8_t *) &object, sizeof(T), global_addr);
         }
 
-
         template <typename T>
-        T Load(uint64_t global_addr, std::memory_order order = std::memory_order::memory_order_acquire) {
+        T Load(uint64_t global_addr) {
             T out_buffer;
-
-            if (order == std::memory_order::memory_order_acq_rel || order == std::memory_order::memory_order_release)
-                Release();
-
-            uint64_t local_addr;
-            int target_rank;
-            if (!locate_global_addr(global_addr, target_rank, local_addr)) {
-                return out_buffer;
-            }
-
-            if (target_rank == rank) {
-                memcpy(&out_buffer, &memory->Get()[local_addr], sizeof(T));
-            } else {
-                connect_peer(target_rank);
-                auto wrapper = device->Wrap((uint8_t *) &out_buffer, sizeof(T));
-                ASSERT(wrapper);
-
-                rdma::WorkBatch batch(endpoint);
-                batch.Read(rdma::WorkBatch::PathDesc(wrapper, 0),
-                           rdma::WorkBatch::PathDesc(worker_map[target_rank].LocalVirtAddr,
-                                                     worker_map[target_rank].MemRegionKey),
-                           (uint32_t) wrapper->Size());
-
-                ASSERT(!batch.Commit());
-                ASSERT(!device->Poll(-1));
-            }
-
-            if (order == std::memory_order::memory_order_acq_rel || order == std::memory_order::memory_order_acquire)
-                Acquire();
-
+            naive_load((uint8_t *) &out_buffer, sizeof(T), global_addr);
             return out_buffer;
         }
 
@@ -106,18 +48,25 @@ namespace universe {
         bool map_ready();
         void map_dump();
         bool locate_global_addr(uint64_t global_addr, int &target_rank, uint64_t &local_addr);
-        void connect_peer(int target_rank);
+        void complete_connection();
 
+        void do_read_page(uint64_t global_addr);
+        void do_write_page(uint64_t global_addr);
+
+        void naive_load(uint8_t *object, size_t size, uint64_t global_addr);
+        void naive_store(uint8_t *object, size_t size, uint64_t global_addr);
+
+        void fast_load(uint8_t *object, size_t size, uint64_t global_addr);
+        void fast_store(uint8_t *object, size_t size, uint64_t global_addr);
     private:
-        std::shared_ptr<grpc::Channel>      channel;
-        std::unique_ptr<Controller::Stub>   stub;
-        int                                 rank, num_procs;
-        std::shared_ptr<rdma::Device>       device;
-        std::shared_ptr<rdma::EndPoint>     endpoint;
-        int                                 endpoint_peer_rank;
-        std::shared_ptr<rdma::MemoryRegion> memory;
-        std::vector<WorkerEntry>            worker_map;
-        // std::vector< std::shared_ptr<rdma::MemoryRegion> > cached_memory;
+        std::shared_ptr<grpc::Channel>                           channel;
+        std::unique_ptr<Controller::Stub>                        stub;
+        int                                                      rank, num_procs;
+        std::shared_ptr<rdma::Device>                            device;
+        std::vector< std::shared_ptr<rdma::EndPoint> >           endpoint;
+        std::vector<WorkerEntry>                                 worker_map;
+        std::shared_ptr<rdma::MemoryRegion>                      data_memory;
+        std::map<uint64_t, std::shared_ptr<rdma::MemoryRegion> > cached_memory;
     };
 }
 

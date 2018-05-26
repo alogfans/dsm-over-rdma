@@ -21,7 +21,7 @@ namespace rdma {
 
     const uint32_t MultiCastQPN = 0xffffffff;
     const uint32_t MulticastKey = 0x11111111;
-    const int FullAccessPermFlags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+    const uint32_t FullAccessPermFlags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
     class Device {
     public:
@@ -122,12 +122,14 @@ namespace rdma {
             PathDesc(const std::shared_ptr<MemoryRegion> memory, uint64_t offset) :
                     Address(memory->VirtualAddress() + offset), Key(memory->Key()) { }
             PathDesc(uint64_t address, uint32_t key) : Address(address), Key(key) { }
+            PathDesc(const PathDesc &rhs) : Address(rhs.Address), Key(rhs.Key) { }
+            PathDesc &operator=(const PathDesc &rhs) { Address = rhs.Address, Key = rhs.Key; }
 
             uint64_t Address;
             uint32_t Key;
         };
 
-        WorkBatch(std::shared_ptr<EndPoint> endpoint) : counter(0), endpoint(std::move(endpoint)) { }
+        WorkBatch(std::shared_ptr<EndPoint> endpoint) : endpoint(std::move(endpoint)) { }
 
         void Write(const PathDesc &local, const PathDesc &target, uint32_t length);
         void WriteImm(const PathDesc &local, const PathDesc &target, uint32_t length, uint32_t imm_data);
@@ -140,7 +142,7 @@ namespace rdma {
         int Commit();
 
     private:
-        std::atomic<uint64_t> counter;
+        static std::atomic<uint64_t> counter;
         std::vector<ibv_send_wr> send_wr;
         std::vector<ibv_sge> send_sge;
         std::vector<ibv_recv_wr> recv_wr;

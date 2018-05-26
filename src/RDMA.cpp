@@ -11,6 +11,8 @@
 
 using namespace rdma;
 
+std::atomic<uint64_t> WorkBatch::counter(0);
+
 ibv_context *Device::getContext(const std::string &device_name) {
     ibv_device **device_list = nullptr;
     ibv_context *context = nullptr;
@@ -187,7 +189,7 @@ int Device::Poll(std::vector<ibv_wc> &replies, int timeout_ms) {
             replies.push_back(wc);
 
             if (wc.status != IBV_WC_SUCCESS) {
-                DEBUG("found a failed working request %s", ibv_wc_status_str(wc.status));
+                DEBUG("found a failed working request %lu %s %d", wc.wr_id, ibv_wc_status_str(wc.status), wc.vendor_err);
                 return -1;
             }
         } while (rc);
@@ -212,8 +214,8 @@ int Device::Poll(std::vector<ibv_wc> &replies, int timeout_ms) {
 
 std::shared_ptr<MemoryRegion> Device::Malloc(size_t n, bool zero, uint64_t align) {
     uint8_t *byteBuffer = nullptr;
-    posix_memalign((void **) &byteBuffer, align, n);
-    if (!byteBuffer) {
+    int ret = posix_memalign((void **) &byteBuffer, align, n);
+    if (ret || !byteBuffer) {
         DEBUG("rio_malloc failed.");
         return nullptr;
     }
@@ -540,7 +542,7 @@ int WorkBatch::Commit() {
         send_sge.clear();
 
         if (rc) {
-            DEBUG("ibv_post_send error. first bad_wr %lud", bad_wr ? bad_wr->wr_id : 0xffffffff);
+            DEBUG("ibv_post_send error. first bad_wr %lu", bad_wr ? bad_wr->wr_id : 0xffffffff);
             return rc;
         }
     }
@@ -559,7 +561,7 @@ int WorkBatch::Commit() {
         recv_sge.clear();
 
         if (rc) {
-            DEBUG("ibv_post_recv error. first bad_wr %lud", bad_wr ? bad_wr->wr_id : 0xffffffff);
+            DEBUG("ibv_post_recv error. first bad_wr %lu", bad_wr ? bad_wr->wr_id : 0xffffffff);
             return rc;
         }
     }

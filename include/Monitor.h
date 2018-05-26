@@ -8,10 +8,13 @@
 #include <string>
 #include <grpc++/grpc++.h>
 #include <atomic>
+#include <bitset>
 
 #include "message.grpc.pb.h"
 #include "message.pb.h"
 #include "WorkerMap.h"
+
+#define PAGESIZE (4 * 1024 * 1024)
 
 namespace universe {
     class MonitorImpl final : public Controller::Service {
@@ -33,8 +36,27 @@ namespace universe {
                                     const CacheWorkerMapRequest* request,
                                     CacheWorkerMapReply* response) override;
 
+        grpc::Status ReadFault(grpc::ServerContext* context,
+                               const FaultRequest* request,
+                               FaultReply* response) override;
+
+        grpc::Status WriteFault(grpc::ServerContext* context,
+                                const FaultRequest* request,
+                                FaultReply* response) override;
+
+        grpc::Status EndFault(grpc::ServerContext* context,
+                              const FaultRequest* request,
+                              FaultReply* response) override;
+
     private:
         std::shared_ptr<WorkerMap> worker_map;
+
+        struct PageState {
+            std::atomic<bool> onFaultProgress;
+            std::set<int> copySet;
+        };
+
+        std::map<uint64_t, PageState> page_states;
     };
 
     class Monitor {

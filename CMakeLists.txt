@@ -41,7 +41,7 @@ set(SHARED_HEADERS
         include/Worker.h
         ${PROTO_FILES}.pb.h
         ${PROTO_FILES}.grpc.pb.h
-        include/cxxopts.h
+        include/CmdParser.h
         include/WorkerMap.h
         include/RDMA.h include/Logger.h)
 

@@ -1,39 +1,20 @@
 #include <iostream>
+#include <string>
 #include <unistd.h>
 #include "Monitor.h"
-#include "cxxopts.h"
+#include "CmdParser.h"
 
 using namespace universe;
 
-int num_of_procs = 1;
-std::string backend_server = "0.0.0.0:10086";
+static int num_of_procs = 1;
+static std::string backend_server("0.0.0.0:10086");
 
 int parse_arguments(int argc, char **argv) {
-    try {
-        cxxopts::Options options(argv[0], "Distributed shared CPU/GPU memory (Monitor)");
-        options.add_options()
-                ("n,num-procs", "Number of processes", cxxopts::value<int>(num_of_procs))
-                ("s,server", "Backend server hostname", cxxopts::value<std::string>(backend_server))
-                ("h,help", "Print help information");
-        auto result = options.parse(argc, argv);
-
-        if (result.count("help")) {
-            std::cout << options.help() << std::endl;
-            exit(0);
-        }
-
-        if (result.count("server")) {
-            backend_server = result["server"].as<std::string>();
-        }
-
-        if (result.count("num")) {
-            num_of_procs = result["num"].as<int>();
-        }
-    } catch (const cxxopts::OptionException& e) {
-        std::cout << "error parsing options: " << e.what() << std::endl;
-        exit(1);
-    }
-
+    CLI::App app{"Distributed shared CPU/GPU memory (Monitor)"};
+    app.add_option("-s,--server", backend_server, "Backend server hostname");
+    app.add_option("-n,--num-proc", num_of_procs, "Memory size in megabytes");
+    app.set_help_flag("-h,--help", "Print help information");
+    CLI11_PARSE(app, argc, argv);
     return 0;
 }
 

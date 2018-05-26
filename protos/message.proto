@@ -3,18 +3,18 @@ syntax = "proto3";
 package universe;
 
 service Controller {
-    rpc JoinGroup(JoinGroupRequest) returns (JoinGroupReply) {}
-    rpc LeaveGroup(LeaveGroupRequest) returns (LeaveGroupReply) {}
-    rpc CacheWorkerMap(CacheWorkerMapRequest) returns (CacheWorkerMapReply) {}
+    rpc JoinGroup (JoinGroupRequest) returns (JoinGroupReply) {}
+    rpc LeaveGroup (LeaveGroupRequest) returns (LeaveGroupReply) {}
+    rpc CacheWorkerMap (CacheWorkerMapRequest) returns (CacheWorkerMapReply) {}
 
-    rpc Barrier(BarrierRequest) returns (BarrierReply) {}
-    rpc AcquireLock(AcquireLockRequest) returns (AcquireLockReply) {}
-    rpc ReleaseLock(ReleaseLockRequest) returns (ReleaseLockReply) {}
+    rpc ReadFault(FaultRequest) returns (FaultReply) {}
+    rpc WriteFault(FaultRequest) returns (FaultReply) {}
+    rpc EndFault(FaultRequest) returns (FaultReply) {}
 }
 
 message JoinGroupRequest {
     int32  rank = 1;
-    uint32 qpn = 2;
+    repeated uint32 qpn = 2;
     uint32 lid = 3;  // only lower 16 bits used
     uint64 addr = 4;
     uint32 key = 5;
@@ -44,27 +44,12 @@ message LeaveGroupReply {
     int32 err_code = 1;  // reserved
 }
 
-message BarrierRequest {
+message FaultRequest {
     int32 rank = 1;
-    int32 barrier_id = 2;
+    uint64 addr = 2;
 }
 
-message BarrierReply {
-    int32 err_code = 1;
-}
-
-message AcquireLockRequest {
-
-}
-
-message AcquireLockReply {
-
-}
-
-message ReleaseLockRequest {
-
-}
-
-message ReleaseLockReply {
-
+message FaultReply {
+    int32 err_code = 1;  // reserved
+    repeated int32 cached_rank = 2;
 }
