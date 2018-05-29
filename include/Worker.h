@@ -15,12 +15,13 @@
 #include "RDMA.h"
 
 #define PAGESIZE (4 * 1024 * 1024)
+#define CACHE_MAP_SIZE 1024
 
 namespace universe {
     class Worker {
     public:
         Worker() : rank(-1), num_procs(0) { }
-        bool Connect(const std::string &address, int rank, uint64_t size, uint64_t align);
+        bool Connect(const std::string &address, int rank, int num_of_procs, uint64_t size, uint64_t align);
         bool WaitUntilReady(int interval_ms, int max_attempt, bool dump = false);
         bool UpdateWorkerMap();
         bool Disconnect();
@@ -58,6 +59,8 @@ namespace universe {
 
         void fast_load(uint8_t *object, size_t size, uint64_t global_addr);
         void fast_store(uint8_t *object, size_t size, uint64_t global_addr);
+
+        bool post_fault(const std::string &type, uint64_t global_addr);
     private:
         std::shared_ptr<grpc::Channel>                           channel;
         std::unique_ptr<Controller::Stub>                        stub;

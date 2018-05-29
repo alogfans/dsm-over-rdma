@@ -13,21 +13,28 @@ using namespace rdma;
 
 static int rank = 0;
 static uint64_t memory_size = 16;
+static int num_of_procs = 1;
 static std::string backend_server = "localhost:10086";
 
 int parse_arguments(int argc, char **argv) {
     CLI::App app{"Distributed shared CPU/GPU memory (Worker)"};
-    app.add_option("-s,--server", backend_server, "Backend server hostname");
-    app.add_option("-m,--mem-size", memory_size, "Memory size in megabytes");
-    app.add_option("-r,--rank", rank, "Rank of this node, must be lower than num_of_procs in monitor side");
-    app.set_help_flag("-h,--help", "Print help information");
-    CLI11_PARSE(app, argc, argv);
+    app.add_option("-s,--monitor-host", backend_server, "Monitor hostname [default localhost:10086]");
+    app.add_option("-m,--memory", memory_size, "Memory size in MB [default 16]");
+    app.add_option("-n,--num-worker", num_of_procs, "Number of workers in the group [default 1]");
+    app.add_option("-r,--rank", rank, "Rank of this node, must be distinct non-negative value and lower than num_of_procs in the monitor side");
+
+    try {
+        app.parse(argc, argv);
+    } catch (CLI::ParseError &e) {
+        std::exit(app.exit(e));
+    }
+
     return 0;
 }
 
 int prepare_worker(Worker &worker, int argc, char **argv) {
     parse_arguments(argc, argv);
-    if (!worker.Connect(backend_server, rank, memory_size * 1024 * 1024, 64)) {
+    if (!worker.Connect(backend_server, rank, num_of_procs, memory_size * 1024 * 1024, 64)) {
         std::cout << "execution error." << std::endl;
         exit(-1);
     }
@@ -50,12 +57,12 @@ int main(int argc, char **argv) {
     uint64_t result = worker.Load<uint64_t>(worker.GlobalAddress(0));
     std::cout << rank << ":" << result << std::endl;
 
-    worker.Lock(worker.GlobalAddress(32, 0));
+    worker.Lock(worker.GlobalAddress(32, 1));
     std::cout << "enter lock region" << std::endl;
     uint64_t data = worker.Load<uint64_t>(worker.GlobalAddress(40, 0));
     std::cout << rank << ":" << data << std::endl;
     worker.Store(data + 512, worker.GlobalAddress(40, 0));
-    worker.Unlock(worker.GlobalAddress(32, 0));
+    worker.Unlock(worker.GlobalAddress(32, 1));
 
     result = worker.Load<uint64_t>(worker.GlobalAddress(40, 0));
     std::cout << rank << ":" << result << std::endl;

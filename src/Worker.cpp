@@ -7,9 +7,11 @@
 #include "Worker.h"
 #include "Logger.h"
 
+#define ENDPOINT_SELECTOR(i) ((i) > rank ? endpoint[(i) - 1] : endpoint[(i)])
+
 using namespace universe;
 
-bool Worker::Connect(const std::string &address, int rank, uint64_t size, uint64_t align) {
+bool Worker::Connect(const std::string &address, int rank, int num_of_procs, uint64_t size, uint64_t align) {
     if (this->rank >= 0) {
         return false;
     }
@@ -21,13 +23,15 @@ bool Worker::Connect(const std::string &address, int rank, uint64_t size, uint64
         return false;
     }
 
-    // TODO change to predefined value
-    for (int i = 0; i < 2; i++) {
-        auto entry = device->CreateEndPoint(IBV_QPT_RC);
-        if (!entry) {
-            return false;
+    num_procs = num_of_procs;
+    for (int i = 0; i < num_of_procs; i++) {
+        if (i != rank) {
+            auto entry = device->CreateEndPoint(IBV_QPT_RC);
+            if (!entry) {
+                return false;
+            }
+            endpoint.push_back(entry);
         }
-        endpoint.push_back(entry);
     }
 
     data_memory = device->Malloc(size, true, align);
@@ -55,7 +59,6 @@ bool Worker::Connect(const std::string &address, int rank, uint64_t size, uint64
         return false;
     }
 
-    num_procs = reply.num_of_procs();
     return true;
 }
 
@@ -219,6 +222,8 @@ void Worker::Barrier(uint64_t global_addr) {
     ASSERT(locate_global_addr(global_addr, target_rank, local_addr));
     ASSERT((local_addr % sizeof(uint64_t)) == 0);
 
+    cached_memory.clear();
+
     uint64_t lock_variable;
     auto wrapper = device->Wrap((uint8_t *) &lock_variable, sizeof(uint64_t));
     ASSERT(wrapper);
@@ -227,7 +232,8 @@ void Worker::Barrier(uint64_t global_addr) {
             worker_map[target_rank].MemRegionKey);
 
     if (rank != target_rank) {
-        rdma::WorkBatch batch(endpoint[target_rank]);
+        rdma::WorkBatch batch(ENDPOINT_SELECTOR(target_rank));
+        batch.CompareAndSwap(rdma::WorkBatch::PathDesc(wrapper, 0), target, num_procs - 1, 0);
         batch.FetchAndAdd(rdma::WorkBatch::PathDesc(wrapper, 0), target, 1);
         ASSERT(!batch.Commit());
         ASSERT(!device->Poll(-1));
@@ -241,7 +247,7 @@ void Worker::Barrier(uint64_t global_addr) {
             uint64_t *cast_lock = (uint64_t *) &data_memory->Get()[local_addr];
             lock_variable = __sync_fetch_and_add(cast_lock, 0);
         } else {
-            rdma::WorkBatch batch(endpoint[target_rank]);
+            rdma::WorkBatch batch(ENDPOINT_SELECTOR(target_rank));
             batch.FetchAndAdd(rdma::WorkBatch::PathDesc(wrapper, 0), target, 0);
 
             ASSERT(!batch.Commit());
@@ -273,6 +279,8 @@ void Worker::Lock(uint64_t global_addr) {
     ASSERT(locate_global_addr(global_addr, target_rank, local_addr));
     ASSERT((local_addr % sizeof(uint64_t)) == 0);
 
+    cached_memory.clear();
+
     uint64_t lock_variable;
     auto target = rdma::WorkBatch::PathDesc(worker_map[target_rank].LocalVirtAddr + local_addr,
             worker_map[target_rank].MemRegionKey);
@@ -284,15 +292,13 @@ void Worker::Lock(uint64_t global_addr) {
         if (target_rank == rank) {
             lock_variable = __sync_val_compare_and_swap((uint64_t *) &data_memory->Get()[local_addr], 0, 1);
         } else {
-            rdma::WorkBatch batch(endpoint[target_rank]);
-            // Set locked if unlocked
+            rdma::WorkBatch batch(ENDPOINT_SELECTOR(target_rank));
             batch.CompareAndSwap(rdma::WorkBatch::PathDesc(wrapper, 0), target, 0, 1);
             ASSERT(!batch.Commit());
             ASSERT(!device->Poll(-1));
         }
 
         if (lock_variable != 0) {
-            // lock failed. Wait and retry
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
@@ -303,6 +309,8 @@ void Worker::Unlock(uint64_t global_addr) {
     uint64_t local_addr;
     ASSERT(locate_global_addr(global_addr, target_rank, local_addr));
     ASSERT(local_addr % sizeof(uint64_t) == 0);
+
+    cached_memory.clear();
 
     uint64_t lock_variable;
     auto target = rdma::WorkBatch::PathDesc(worker_map[target_rank].LocalVirtAddr + local_addr,
@@ -315,26 +323,55 @@ void Worker::Unlock(uint64_t global_addr) {
         if (target_rank == rank) {
             lock_variable = __sync_val_compare_and_swap((uint64_t *) &data_memory->Get()[local_addr], 1, 0);
         } else {
-            rdma::WorkBatch batch(endpoint[target_rank]);
-            // Set locked if unlocked
+            rdma::WorkBatch batch(ENDPOINT_SELECTOR(target_rank));
             batch.CompareAndSwap(rdma::WorkBatch::PathDesc(wrapper, 0), target, 1, 0);
             ASSERT(!batch.Commit());
             ASSERT(!device->Poll(-1));
         }
 
         if (lock_variable == 0) {
-            // lock failed. Wait and retry
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
 }
 
 void Worker::complete_connection() {
-    for (int i = 0; i < endpoint.size(); i++) {
-        if (i != rank) {
-            ASSERT(!endpoint[i]->RegisterRemote(worker_map[i].LocalID, worker_map[i].QueuePairNum[rank]));
+    for (int i = 0; i < num_procs; i++) {
+        if (i == rank) {
+            continue;
         }
+
+        int target_selector = (i > rank) ? i - 1 : i;
+        int source_selector = (rank > i) ? rank - 1 : rank;
+
+        ASSERT(!endpoint[target_selector]->RegisterRemote(worker_map[i].LocalID, worker_map[i].QueuePairNum[source_selector]));
     }
+}
+
+bool Worker::post_fault(const std::string &type, uint64_t global_addr) {
+    grpc::ClientContext context;
+    grpc::Status status;
+    FaultRequest request;
+    request.set_rank(rank);
+    request.set_addr(global_addr);
+    FaultReply reply;
+
+    if (type == "ReadFault") {
+        status = stub->ReadFault(&context, request, &reply);
+    } else if (type == "WriteFault") {
+        status = stub->WriteFault(&context, request, &reply);
+    } else if (type == "EndFault") {
+        status = stub->EndFault(&context, request, &reply);
+    } else {
+        return false;
+    }
+
+    if (!status.ok()) {
+        std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+        return false;
+    }
+
+    return true;
 }
 
 void Worker::do_read_page(uint64_t global_addr) {
@@ -351,22 +388,12 @@ void Worker::do_read_page(uint64_t global_addr) {
         return;
     }
 
-    grpc::ClientContext context;
-    grpc::Status status;
-    FaultRequest request;
-    request.set_rank(rank);
-    request.set_addr(global_addr);
-    FaultReply reply;
-
-    status = stub->ReadFault(&context, request, &reply);
-    if (!status.ok()) {
-        std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+    if (!post_fault("ReadFault", global_addr)) {
         return;
     }
 
     cached_memory[global_addr] = device->Malloc(PAGESIZE, true, 16);
-
-    rdma::WorkBatch batch(endpoint[target_rank]);
+    rdma::WorkBatch batch(ENDPOINT_SELECTOR(target_rank));
     batch.Read(rdma::WorkBatch::PathDesc(cached_memory[global_addr], 0),
                rdma::WorkBatch::PathDesc(worker_map[target_rank].LocalVirtAddr + local_addr,
                                          worker_map[target_rank].MemRegionKey),
@@ -375,9 +402,7 @@ void Worker::do_read_page(uint64_t global_addr) {
     ASSERT(!batch.Commit());
     ASSERT(!device->Poll(-1));
 
-    status = stub->EndFault(&context, request, &reply);
-    if (!status.ok()) {
-        std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+    if (!post_fault("EndFault", global_addr)) {
         return;
     }
 }
@@ -392,18 +417,11 @@ void Worker::do_write_page(uint64_t global_addr) {
         return;
     }
 
-    grpc::ClientContext context;
-    grpc::Status status;
-    FaultRequest request;
-    request.set_rank(rank);
-    request.set_addr(global_addr);
-    FaultReply reply;
-    status = stub->WriteFault(&context, request, &reply);
-    if (!status.ok()) {
-        std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+    if (!post_fault("WriteFault", global_addr)) {
         return;
     }
 
+    /*
     for (auto &v : reply.cached_rank()) {
         if (v == rank) {
             continue;
@@ -411,9 +429,10 @@ void Worker::do_write_page(uint64_t global_addr) {
 
         std::cout << "Not implemented -- must erase entry " << global_addr << " in rank " << v << std::endl;
     }
+    */
 
     if (target_rank != rank) {
-        rdma::WorkBatch batch(endpoint[target_rank]);
+        rdma::WorkBatch batch(ENDPOINT_SELECTOR(target_rank));
         batch.Write(rdma::WorkBatch::PathDesc(cached_memory[global_addr], 0),
                     rdma::WorkBatch::PathDesc(worker_map[target_rank].LocalVirtAddr + local_addr,
                                               worker_map[target_rank].MemRegionKey),
@@ -425,9 +444,7 @@ void Worker::do_write_page(uint64_t global_addr) {
         cached_memory.erase(global_addr);
     }
 
-    status = stub->EndFault(&context, request, &reply);
-    if (!status.ok()) {
-        std::cout << status.error_code() << ": " << status.error_message() << std::endl;
+    if (!post_fault("EndFault", global_addr)) {
         return;
     }
 }
@@ -450,7 +467,7 @@ void Worker::naive_load(uint8_t *object, size_t size, uint64_t global_addr) {
         auto wrapper = device->Wrap(object, size);
         ASSERT(wrapper);
 
-        rdma::WorkBatch batch(endpoint[target_rank]);
+        rdma::WorkBatch batch(ENDPOINT_SELECTOR(target_rank));
         batch.Read(rdma::WorkBatch::PathDesc(wrapper, 0),
                    rdma::WorkBatch::PathDesc(worker_map[target_rank].LocalVirtAddr + local_addr,
                                              worker_map[target_rank].MemRegionKey),
@@ -479,7 +496,7 @@ void Worker::naive_store(uint8_t *object, size_t size, uint64_t global_addr) {
         auto wrapper = device->Wrap(object, size);
         ASSERT(wrapper);
 
-        rdma::WorkBatch batch(endpoint[target_rank]);
+        rdma::WorkBatch batch(ENDPOINT_SELECTOR(target_rank));
         batch.Write(rdma::WorkBatch::PathDesc(wrapper, 0),
                     rdma::WorkBatch::PathDesc(worker_map[target_rank].LocalVirtAddr + local_addr,
                                              worker_map[target_rank].MemRegionKey),
@@ -508,7 +525,7 @@ void Worker::fast_load(uint8_t *object, size_t size, uint64_t global_addr) {
     } else {
         uint64_t aligned_addr = global_addr - global_addr % PAGESIZE;
         do_read_page(aligned_addr);
-        memcpy(object, &cached_memory[aligned_addr]->Get()[local_addr], size);
+        memcpy(object, &cached_memory[aligned_addr]->Get()[local_addr - aligned_addr], size);
     }
 }
 
@@ -528,10 +545,11 @@ void Worker::fast_store(uint8_t *object, size_t size, uint64_t global_addr) {
     if (target_rank == rank) {
         memcpy(&data_memory->Get()[local_addr], object, size);
     } else {
-        if (cached_memory.find(aligned_addr) != cached_memory.end()) {
+        if (cached_memory.find(aligned_addr) == cached_memory.end()) {
             do_read_page(aligned_addr);
         }
-        memcpy(&cached_memory[aligned_addr]->Get()[local_addr], object, size);
+
+        memcpy(&cached_memory[aligned_addr]->Get()[local_addr - aligned_addr], object, size);
     }
     do_write_page(aligned_addr);
 }

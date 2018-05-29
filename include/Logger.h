@@ -7,6 +7,6 @@
 
 #define DEBUG(format,...) printf("ERROR " __FILE__":%03d " format " (errno %d %s)\n", __LINE__, ##__VA_ARGS__, errno, strerror(errno))
 
-#define ASSERT(func) do { if (!(func)) { DEBUG("assertion '%s' failed", #func); } } while (0)
+#define ASSERT(func) do { if (!(func)) { DEBUG("assertion '%s' failed", #func); exit(EXIT_FAILURE); } } while (0)
 
 #endif //UNIVERSE_LOGGER_H
