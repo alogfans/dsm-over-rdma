@@ -222,8 +222,6 @@ void Worker::Barrier(uint64_t global_addr) {
     ASSERT(locate_global_addr(global_addr, target_rank, local_addr));
     ASSERT((local_addr % sizeof(uint64_t)) == 0);
 
-    cached_memory.clear();
-
     uint64_t lock_variable;
     auto wrapper = device->Wrap((uint8_t *) &lock_variable, sizeof(uint64_t));
     ASSERT(wrapper);
@@ -254,6 +252,8 @@ void Worker::Barrier(uint64_t global_addr) {
             ASSERT(!device->Poll(-1));
         }
     }
+
+    cache_valid.clear();
 }
 
 
@@ -279,8 +279,6 @@ void Worker::Lock(uint64_t global_addr) {
     ASSERT(locate_global_addr(global_addr, target_rank, local_addr));
     ASSERT((local_addr % sizeof(uint64_t)) == 0);
 
-    cached_memory.clear();
-
     uint64_t lock_variable;
     auto target = rdma::WorkBatch::PathDesc(worker_map[target_rank].LocalVirtAddr + local_addr,
             worker_map[target_rank].MemRegionKey);
@@ -302,6 +300,8 @@ void Worker::Lock(uint64_t global_addr) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
+
+    Invalidate();
 }
 
 void Worker::Unlock(uint64_t global_addr) {
@@ -310,7 +310,7 @@ void Worker::Unlock(uint64_t global_addr) {
     ASSERT(locate_global_addr(global_addr, target_rank, local_addr));
     ASSERT(local_addr % sizeof(uint64_t) == 0);
 
-    cached_memory.clear();
+    Flush();
 
     uint64_t lock_variable;
     auto target = rdma::WorkBatch::PathDesc(worker_map[target_rank].LocalVirtAddr + local_addr,
@@ -329,10 +329,38 @@ void Worker::Unlock(uint64_t global_addr) {
             ASSERT(!device->Poll(-1));
         }
 
-        if (lock_variable == 0) {
+        if (lock_variable != 1) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
+}
+
+void Worker::Invalidate(uint64_t global_addr) {
+    Flush(global_addr);
+    uint64_t aligned_addr = global_addr - global_addr % PAGESIZE;
+    cache_valid[aligned_addr] = false;
+}
+
+void Worker::Invalidate() {
+    Flush();
+    cache_valid.clear();
+}
+
+void Worker::Flush(uint64_t global_addr) {
+    uint64_t aligned_addr = global_addr - global_addr % PAGESIZE;
+    if (cache_dirty[aligned_addr]) {
+        do_write_page(aligned_addr);
+        cache_dirty[aligned_addr] = false;
+    }
+}
+
+void Worker::Flush() {
+    for (auto &v : cache_dirty) {
+        if (v.second) {
+            do_write_page(v.first);
+        }
+    }
+    cache_dirty.clear();
 }
 
 void Worker::complete_connection() {
@@ -348,32 +376,6 @@ void Worker::complete_connection() {
     }
 }
 
-bool Worker::post_fault(const std::string &type, uint64_t global_addr) {
-    grpc::ClientContext context;
-    grpc::Status status;
-    FaultRequest request;
-    request.set_rank(rank);
-    request.set_addr(global_addr);
-    FaultReply reply;
-
-    if (type == "ReadFault") {
-        status = stub->ReadFault(&context, request, &reply);
-    } else if (type == "WriteFault") {
-        status = stub->WriteFault(&context, request, &reply);
-    } else if (type == "EndFault") {
-        status = stub->EndFault(&context, request, &reply);
-    } else {
-        return false;
-    }
-
-    if (!status.ok()) {
-        std::cout << status.error_code() << ": " << status.error_message() << std::endl;
-        return false;
-    }
-
-    return true;
-}
-
 void Worker::do_read_page(uint64_t global_addr) {
     int target_rank;
     uint64_t local_addr;
@@ -382,19 +384,14 @@ void Worker::do_read_page(uint64_t global_addr) {
     if (target_rank == rank) {
         return;
     }
-
-    if (cached_memory.find(global_addr) != cached_memory.end()) {
-        // we have read this page.
-        return;
+    if (cache_memory.find(global_addr) == cache_memory.end()) {
+        auto page_cache = device->Malloc(PAGESIZE, true, 16);
+        ASSERT(page_cache);
+        cache_memory[global_addr] = page_cache;
     }
 
-    if (!post_fault("ReadFault", global_addr)) {
-        return;
-    }
-
-    cached_memory[global_addr] = device->Malloc(PAGESIZE, true, 16);
     rdma::WorkBatch batch(ENDPOINT_SELECTOR(target_rank));
-    batch.Read(rdma::WorkBatch::PathDesc(cached_memory[global_addr], 0),
+    batch.Read(rdma::WorkBatch::PathDesc(cache_memory[global_addr], 0),
                rdma::WorkBatch::PathDesc(worker_map[target_rank].LocalVirtAddr + local_addr,
                                          worker_map[target_rank].MemRegionKey),
                PAGESIZE);
@@ -402,51 +399,30 @@ void Worker::do_read_page(uint64_t global_addr) {
     ASSERT(!batch.Commit());
     ASSERT(!device->Poll(-1));
 
-    if (!post_fault("EndFault", global_addr)) {
-        return;
-    }
+    cache_valid[global_addr] = true;
 }
 
 void Worker::do_write_page(uint64_t global_addr) {
     int target_rank;
     uint64_t local_addr;
     ASSERT(locate_global_addr(global_addr, target_rank, local_addr));
-
-    if (target_rank != rank && cached_memory.find(global_addr) == cached_memory.end()) {
-        std::cout << "global_addr not cached -- page not read before. maybe error." << std::endl;
+    if (target_rank == rank) {
         return;
     }
 
-    if (!post_fault("WriteFault", global_addr)) {
+    if (cache_memory.find(global_addr) == cache_memory.end()) {
+        std::cout << "Attempt to write a page that don't read" << std::endl;
         return;
     }
 
-    /*
-    for (auto &v : reply.cached_rank()) {
-        if (v == rank) {
-            continue;
-        }
+    rdma::WorkBatch batch(ENDPOINT_SELECTOR(target_rank));
+    batch.Write(rdma::WorkBatch::PathDesc(cache_memory[global_addr], 0),
+                rdma::WorkBatch::PathDesc(worker_map[target_rank].LocalVirtAddr + local_addr,
+                                          worker_map[target_rank].MemRegionKey),
+                PAGESIZE);
 
-        std::cout << "Not implemented -- must erase entry " << global_addr << " in rank " << v << std::endl;
-    }
-    */
-
-    if (target_rank != rank) {
-        rdma::WorkBatch batch(ENDPOINT_SELECTOR(target_rank));
-        batch.Write(rdma::WorkBatch::PathDesc(cached_memory[global_addr], 0),
-                    rdma::WorkBatch::PathDesc(worker_map[target_rank].LocalVirtAddr + local_addr,
-                                              worker_map[target_rank].MemRegionKey),
-                    PAGESIZE);
-
-        ASSERT(!batch.Commit());
-        ASSERT(!device->Poll(-1));
-
-        cached_memory.erase(global_addr);
-    }
-
-    if (!post_fault("EndFault", global_addr)) {
-        return;
-    }
+    ASSERT(!batch.Commit());
+    ASSERT(!device->Poll(-1));
 }
 
 void Worker::naive_load(uint8_t *object, size_t size, uint64_t global_addr) {
@@ -524,8 +500,11 @@ void Worker::fast_load(uint8_t *object, size_t size, uint64_t global_addr) {
         memcpy(object, &data_memory->Get()[local_addr], size);
     } else {
         uint64_t aligned_addr = global_addr - global_addr % PAGESIZE;
-        do_read_page(aligned_addr);
-        memcpy(object, &cached_memory[aligned_addr]->Get()[local_addr - aligned_addr], size);
+        if (!cache_valid[aligned_addr]) {
+            do_read_page(aligned_addr);
+        }
+
+        memcpy(object, &cache_memory[aligned_addr]->Get()[local_addr % PAGESIZE], size);
     }
 }
 
@@ -541,15 +520,15 @@ void Worker::fast_store(uint8_t *object, size_t size, uint64_t global_addr) {
         return;
     }
 
-    uint64_t aligned_addr = global_addr - global_addr % PAGESIZE;
     if (target_rank == rank) {
         memcpy(&data_memory->Get()[local_addr], object, size);
     } else {
-        if (cached_memory.find(aligned_addr) == cached_memory.end()) {
+        uint64_t aligned_addr = global_addr - global_addr % PAGESIZE;
+        if (!cache_valid[aligned_addr]) {
             do_read_page(aligned_addr);
         }
 
-        memcpy(&cached_memory[aligned_addr]->Get()[local_addr - aligned_addr], object, size);
+        memcpy(&cache_memory[aligned_addr]->Get()[local_addr % PAGESIZE], object, size);
+        cache_dirty[aligned_addr] = true;
     }
-    do_write_page(aligned_addr);
 }

@@ -51,22 +51,26 @@ int main(int argc, char **argv) {
 
     std::cout << "Worker ready." << std::endl;
 
+    const uint64_t lock_area = memory_size / 2 * 1024 * 1024;
+
     int var = 1000 + rank;
     worker.Store(var, worker.GlobalAddress(0, 1 - rank));
-    worker.Barrier(worker.GlobalAddress(24, 0));
+    worker.Barrier(worker.GlobalAddress(lock_area + 0, 0));
     uint64_t result = worker.Load<uint64_t>(worker.GlobalAddress(0));
     std::cout << rank << ":" << result << std::endl;
 
-    worker.Lock(worker.GlobalAddress(32, 1));
+    auto mutex = worker.GlobalAddress(lock_area + 8, 1);
+    worker.Lock(mutex);
+
     std::cout << "enter lock region" << std::endl;
     uint64_t data = worker.Load<uint64_t>(worker.GlobalAddress(40, 0));
     std::cout << rank << ":" << data << std::endl;
     worker.Store(data + 512, worker.GlobalAddress(40, 0));
-    worker.Unlock(worker.GlobalAddress(32, 1));
+
+    worker.Unlock(mutex);
 
     result = worker.Load<uint64_t>(worker.GlobalAddress(40, 0));
     std::cout << rank << ":" << result << std::endl;
-
     std::cout << "Worker terminated." << std::endl;
 
     worker.Disconnect();

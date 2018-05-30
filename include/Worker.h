@@ -33,16 +33,53 @@ namespace universe {
         void Lock(uint64_t global_addr);
         void Unlock(uint64_t global_addr);
 
+        // Invalidate local copy
+        void Invalidate(uint64_t global_addr);
+        void Invalidate();
+
+        // Update local copy to remote
+        void Flush(uint64_t global_addr);
+        void Flush();
+
         template <typename T>
-        void Store(const T& object, uint64_t global_addr) {
-            naive_store((uint8_t *) &object, sizeof(T), global_addr);
+        void Store(const T& in, uint64_t global_addr) {
+            naive_store((uint8_t *) &in, sizeof(T), global_addr);
         }
 
         template <typename T>
         T Load(uint64_t global_addr) {
-            T out_buffer;
-            naive_load((uint8_t *) &out_buffer, sizeof(T), global_addr);
-            return out_buffer;
+            T out;
+            naive_load((uint8_t *) &out, sizeof(T), global_addr);
+            return out;
+        }
+
+        template <typename T>
+        void StoreExp(const T& in, uint64_t global_addr, std::memory_order order = std::memory_order_acquire) {
+            if (order == std::memory_order_release || order == std::memory_order_acq_rel) {
+                Invalidate(global_addr);
+            }
+
+            fast_store((uint8_t *) &in, sizeof(T), global_addr);
+
+            if (order == std::memory_order_acquire || order == std::memory_order_acq_rel) {
+                Flush(global_addr);
+            }
+        }
+
+        template <typename T>
+        T LoadExp(uint64_t global_addr, std::memory_order order = std::memory_order_release) {
+            if (order == std::memory_order_release || order == std::memory_order_acq_rel) {
+                Invalidate(global_addr);
+            }
+
+            T out;
+            fast_load((uint8_t *) &out, sizeof(T), global_addr);
+
+            if (order == std::memory_order_acquire || order == std::memory_order_acq_rel) {
+                Flush(global_addr);
+            }
+
+            return out;
         }
 
     private:
@@ -60,7 +97,6 @@ namespace universe {
         void fast_load(uint8_t *object, size_t size, uint64_t global_addr);
         void fast_store(uint8_t *object, size_t size, uint64_t global_addr);
 
-        bool post_fault(const std::string &type, uint64_t global_addr);
     private:
         std::shared_ptr<grpc::Channel>                           channel;
         std::unique_ptr<Controller::Stub>                        stub;
@@ -69,7 +105,8 @@ namespace universe {
         std::vector< std::shared_ptr<rdma::EndPoint> >           endpoint;
         std::vector<WorkerEntry>                                 worker_map;
         std::shared_ptr<rdma::MemoryRegion>                      data_memory;
-        std::map<uint64_t, std::shared_ptr<rdma::MemoryRegion> > cached_memory;
+        std::map<uint64_t, std::shared_ptr<rdma::MemoryRegion> > cache_memory;
+        std::map<uint64_t, bool>                                 cache_valid, cache_dirty;
     };
 }
 
