@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
 
     int var = 1000 + rank;
     worker.Store(var, worker.GlobalAddress(0, 1 - rank));
-    worker.Barrier(worker.GlobalAddress(lock_area + 0, 0));
+    worker.Barrier(worker.GlobalAddress(lock_area + 0, 1));
     uint64_t result = worker.Load<uint64_t>(worker.GlobalAddress(0));
     std::cout << rank << ":" << result << std::endl;
 
@@ -66,11 +66,11 @@ int main(int argc, char **argv) {
     uint64_t data = worker.Load<uint64_t>(worker.GlobalAddress(40, 0));
     std::cout << rank << ":" << data << std::endl;
     worker.Store(data + 512, worker.GlobalAddress(40, 0));
-
     worker.Unlock(mutex);
 
     result = worker.Load<uint64_t>(worker.GlobalAddress(40, 0));
     std::cout << rank << ":" << result << std::endl;
+
     std::cout << "Worker terminated." << std::endl;
 
     worker.Disconnect();
